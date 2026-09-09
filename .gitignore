@@ -20,3 +20,5 @@ Thumbs.db
 # Python development
 .pytest_cache/
 .mypy_cache/
+# Git Credential Manager diagnostics
+gcm-diagnose.log
