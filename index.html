@@ -1,0 +1,1262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kenya AE Hub - CFHF Farmer Practice Adoption Dashboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg: #F2EFDE;
+    --panel: #FBFAF3;
+    --ink: #1E2A1F;
+    --ink-muted: #5B6B5C;
+    --line: #DAD6C2;
+    --green: #3F7D4B;
+    --green-soft: #E4EFE1;
+    --rust: #A64B2A;
+    --rust-soft: #F5E4DC;
+    --ochre: #C98A2B;
+    --ochre-soft: #F6E9D2;
+    --navy: #2E3B52;
+    --shadow: 0 1px 2px rgba(30,42,31,0.06);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Sans 3", "Segoe UI", -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, .headline {
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+
+  /* =========================================================
+     HEADER
+     ========================================================= */
+
+  header {
+    padding: 22px 36px 20px;
+    border-bottom: 1px solid var(--line);
+
+    display: grid;
+    grid-template-columns: 140px 1fr 140px;
+    align-items: center;
+
+    gap: 2px;
+    position: relative;
+  }
+
+  header .title-block {
+    text-align: center;
+  }
+
+  header .title-block h1 {
+    font-size: 26px;
+    color: var(--ink);
+  }
+
+  header .title-block p {
+    margin: 6px 0 0;
+    color: var(--ink-muted);
+    font-size: 13.5px;
+  }
+
+/* Header logos */
+
+.header-logo {
+  height: 80px;
+
+  display: flex;
+  align-items: center;
+
+  background: transparent;
+}
+
+/* Manor House: logo sits immediately next to title */
+.header-logo.left-logo {
+  justify-content: flex-end;
+  padding-right: 6px;
+}
+
+/* CFHF: logo sits immediately next to title */
+.header-logo.right-logo {
+  justify-content: flex-start;
+  padding-left: 6px;
+}
+
+.header-logo img {
+  max-width: 145px;
+  max-height: 82px;
+
+  width: auto;
+  height: auto;
+
+  object-fit: contain;
+  display: block;
+
+  background: transparent;
+}
+
+  /* Metadata remains on the right/bottom */
+
+  header .meta {
+    position: absolute;
+    right: 36px;
+    bottom: 5px;
+
+    text-align: right;
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+
+
+  /* =========================================================
+     TABS
+     ========================================================= */
+
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+
+    padding: 0 36px;
+
+    border-bottom: 1px solid var(--line);
+
+    background: var(--bg);
+
+    overflow-x: auto;
+  }
+
+  nav.tabs button {
+    appearance: none;
+
+    background: none;
+    border: none;
+
+    padding: 14px 18px;
+
+    font-family: inherit;
+    font-size: 14px;
+
+    color: var(--ink-muted);
+
+    cursor: pointer;
+
+    border-bottom: 3px solid transparent;
+
+    white-space: nowrap;
+  }
+
+  nav.tabs button.active {
+    color: var(--ink);
+
+    border-bottom-color: var(--ochre);
+
+    font-weight: 600;
+  }
+
+  nav.tabs button:hover {
+    color: var(--ink);
+  }
+
+
+  /* =========================================================
+     MAIN
+     ========================================================= */
+
+  main {
+    padding: 28px 36px 60px;
+
+    max-width: 1320px;
+
+    margin: 0 auto;
+  }
+
+  section.view {
+    display: none;
+  }
+
+  section.view.active {
+    display: block;
+  }
+
+
+  /* =========================================================
+     FILTER TOOLBAR
+     ========================================================= */
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+
+    gap: 14px;
+
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    padding: 16px 18px;
+
+    margin-bottom: 22px;
+
+    align-items: flex-end;
+  }
+
+  .field {
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 5px;
+
+    min-width: 150px;
+  }
+
+  .field label {
+    font-size: 11.5px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 0.04em;
+
+    color: var(--ink-muted);
+  }
+
+  .field input,
+  .field select {
+    font-family: inherit;
+
+    font-size: 13.5px;
+
+    padding: 7px 9px;
+
+    border: 1px solid var(--line);
+
+    border-radius: 4px;
+
+    background: #fff;
+
+    color: var(--ink);
+
+    min-width: 150px;
+  }
+
+  .field input:focus,
+  .field select:focus {
+    outline: 2px solid var(--ochre);
+
+    outline-offset: 1px;
+  }
+
+  .toolbar .reset-btn {
+    margin-left: auto;
+
+    align-self: center;
+  }
+
+  button.btn {
+    font-family: inherit;
+
+    font-size: 13px;
+
+    padding: 8px 14px;
+
+    border-radius: 4px;
+
+    border: 1px solid var(--line);
+
+    background: #fff;
+
+    color: var(--ink);
+
+    cursor: pointer;
+  }
+
+  button.btn:hover {
+    border-color: var(--ink-muted);
+  }
+
+  button.btn.primary {
+    background: var(--ink);
+
+    color: var(--bg);
+
+    border-color: var(--ink);
+  }
+
+
+  /* =========================================================
+     KPI CARDS
+     ========================================================= */
+
+  .kpi-row {
+    display: grid;
+
+    grid-template-columns:
+      repeat(auto-fit, minmax(190px, 1fr));
+
+    gap: 14px;
+
+    margin-bottom: 24px;
+  }
+
+  .kpi-card {
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    padding: 16px 18px;
+
+    box-shadow: var(--shadow);
+  }
+
+  .kpi-card .kpi-label {
+    font-size: 11.5px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 0.04em;
+
+    color: var(--ink-muted);
+  }
+
+  .kpi-card .kpi-value {
+    font-family:
+      "Source Serif 4",
+      Georgia,
+      serif;
+
+    font-size: 32px;
+
+    margin-top: 4px;
+
+    color: var(--ink);
+  }
+
+  .kpi-card .kpi-sub {
+    font-size: 12px;
+
+    color: var(--ink-muted);
+
+    margin-top: 2px;
+  }
+
+  .kpi-card.accent-green {
+    border-left: 4px solid var(--green);
+  }
+
+  .kpi-card.accent-rust {
+    border-left: 4px solid var(--rust);
+  }
+
+  .kpi-card.accent-ochre {
+    border-left: 4px solid var(--ochre);
+  }
+
+  .kpi-card.accent-navy {
+    border-left: 4px solid var(--navy);
+  }
+
+
+  /* =========================================================
+     PANELS
+     ========================================================= */
+
+  .panel {
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    padding: 20px 22px;
+
+    margin-bottom: 24px;
+
+    box-shadow: var(--shadow);
+  }
+
+  .panel h2 {
+    font-size: 17px;
+
+    margin-bottom: 4px;
+  }
+
+  .panel .panel-sub {
+    font-size: 12.5px;
+
+    color: var(--ink-muted);
+
+    margin-bottom: 14px;
+  }
+
+  .chart-wrap {
+    position: relative;
+  }
+
+
+  /* =========================================================
+     TWO COLUMN LAYOUT
+     ========================================================= */
+
+  .two-col {
+    display: grid;
+
+    grid-template-columns: 1.3fr 1fr;
+
+    gap: 22px;
+  }
+
+  @media (max-width: 900px) {
+    .two-col {
+      grid-template-columns: 1fr;
+    }
+  }
+
+
+  /* =========================================================
+     TABLE
+     ========================================================= */
+
+  table.data-table {
+    width: 100%;
+
+    border-collapse: collapse;
+
+    font-size: 13px;
+  }
+
+  table.data-table th {
+    text-align: left;
+
+    padding: 8px 10px;
+
+    border-bottom: 2px solid var(--line);
+
+    color: var(--ink-muted);
+
+    font-size: 11.5px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 0.03em;
+
+    cursor: pointer;
+
+    user-select: none;
+
+    white-space: nowrap;
+  }
+
+  table.data-table th:hover {
+    color: var(--ink);
+  }
+
+  table.data-table td {
+    padding: 7px 10px;
+
+    border-bottom: 1px solid var(--line);
+  }
+
+  table.data-table tbody tr:hover {
+    background: var(--green-soft);
+  }
+
+  .status-pill {
+    display: inline-block;
+
+    padding: 2px 8px;
+
+    border-radius: 999px;
+
+    font-size: 11.5px;
+
+    font-weight: 600;
+  }
+
+  .status-yes {
+    background: var(--green-soft);
+
+    color: var(--green);
+  }
+
+  .status-no {
+    background: var(--rust-soft);
+
+    color: var(--rust);
+  }
+
+  .table-scroll {
+    max-height: 420px;
+
+    overflow-y: auto;
+
+    border: 1px solid var(--line);
+
+    border-radius: 4px;
+  }
+
+  .table-footer {
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    margin-top: 10px;
+
+    font-size: 12.5px;
+
+    color: var(--ink-muted);
+  }
+
+  .empty-note {
+    padding: 30px 10px;
+
+    text-align: center;
+
+    color: var(--ink-muted);
+
+    font-size: 13.5px;
+  }
+
+
+  /* =========================================================
+     GALLERY
+     ========================================================= */
+
+  .gallery {
+    display: grid;
+
+    grid-template-columns:
+      repeat(auto-fit, minmax(220px, 1fr));
+
+    gap: 16px;
+  }
+
+  .gallery figure {
+    margin: 0;
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    overflow: hidden;
+
+    background: #fff;
+
+    cursor: zoom-in;
+  }
+
+  .gallery img {
+    width: 100%;
+
+    display: block;
+  }
+
+  .gallery figcaption {
+    padding: 8px 10px;
+
+    font-size: 12px;
+
+    color: var(--ink-muted);
+
+    border-top: 1px solid var(--line);
+  }
+
+
+  /* =========================================================
+     LIGHTBOX
+     ========================================================= */
+
+  #lightbox {
+    display: none;
+
+    position: fixed;
+
+    inset: 0;
+
+    background: rgba(30,42,31,0.85);
+
+    z-index: 50;
+
+    align-items: center;
+
+    justify-content: center;
+
+    padding: 40px;
+
+    cursor: zoom-out;
+  }
+
+  #lightbox.active {
+    display: flex;
+  }
+
+  #lightbox img {
+    max-width: 100%;
+
+    max-height: 100%;
+
+    border-radius: 4px;
+  }
+
+
+  /* =========================================================
+     OVERVIEW
+     ========================================================= */
+
+  .day-summary-grid {
+    display: grid;
+
+    grid-template-columns:
+      repeat(auto-fit, minmax(230px, 1fr));
+
+    gap: 16px;
+  }
+
+  .day-summary-card {
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    padding: 18px 20px;
+
+    box-shadow: var(--shadow);
+  }
+
+  .day-summary-card h3 {
+    font-size: 16px;
+
+    margin-bottom: 10px;
+  }
+
+  .day-summary-card dl {
+    display: grid;
+
+    grid-template-columns: 1fr auto;
+
+    gap: 4px 10px;
+
+    margin: 0;
+
+    font-size: 13px;
+  }
+
+  .day-summary-card dt {
+    color: var(--ink-muted);
+  }
+
+  .day-summary-card dd {
+    margin: 0;
+
+    font-weight: 600;
+
+    text-align: right;
+  }
+
+
+  /* =========================================================
+     PARTNER ORGANIZATIONS
+     ========================================================= */
+
+  .partner-section {
+    max-width: 1320px;
+
+    margin: 0 auto;
+
+    padding: 10px 36px 28px;
+  }
+
+  .partner-section h2 {
+    text-align: center;
+
+    font-size: 18px;
+
+    color: var(--ink);
+
+    margin-bottom: 18px;
+  }
+
+  /*
+     Five fixed positions are used.
+     This prevents the layout from jumping when logos change.
+  */
+
+  .partner-carousel {
+    display: grid;
+
+    grid-template-columns:
+      repeat(5, 1fr);
+
+    gap: 18px;
+
+    align-items: center;
+  }
+
+  .partner-slot {
+    height: 105px;
+
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-radius: 6px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    padding: 12px;
+
+    box-shadow: var(--shadow);
+
+    overflow: hidden;
+
+    opacity: 1;
+
+    transition:
+      opacity 1s ease-in-out;
+  }
+
+  .partner-slot.fade-out {
+    opacity: 0;
+  }
+
+  .partner-slot.fade-in {
+    opacity: 1;
+  }
+
+  .partner-slot img {
+    max-width: 100%;
+
+    max-height: 75px;
+
+    width: auto;
+
+    height: auto;
+
+    object-fit: contain;
+
+    display: block;
+  }
+
+
+  /* =========================================================
+     FOOTER
+     ========================================================= */
+
+  footer {
+    text-align: center;
+
+    padding: 24px;
+
+    color: var(--ink-muted);
+
+    font-size: 12px;
+
+    border-top: 1px solid var(--line);
+  }
+
+
+  /* =========================================================
+     PRINT
+     ========================================================= */
+
+  @media print {
+
+    nav.tabs,
+    .toolbar,
+    .reset-btn,
+    button.btn {
+      display: none !important;
+    }
+
+    section.view {
+      display: block !important;
+    }
+  }
+
+
+  /* =========================================================
+     RESPONSIVE HEADER
+     ========================================================= */
+
+  @media (max-width: 700px) {
+
+    header {
+      grid-template-columns:
+        90px 1fr 90px;
+
+      gap: 10px;
+
+      padding: 18px 18px 32px;
+    }
+
+    .header-logo {
+      height: 65px;
+    }
+
+    .header-logo img {
+      max-width: 80px;
+
+      max-height: 58px;
+    }
+
+    header .title-block h1 {
+      font-size: 20px;
+    }
+
+    header .title-block p {
+      font-size: 11.5px;
+    }
+
+    header .meta {
+      right: 18px;
+    }
+
+    .partner-section {
+      padding-left: 18px;
+
+      padding-right: 18px;
+    }
+
+    .partner-carousel {
+      grid-template-columns:
+        repeat(3, 1fr);
+    }
+  }
+
+  @media (max-width: 500px) {
+
+    .partner-carousel {
+      grid-template-columns:
+        repeat(2, 1fr);
+    }
+
+    .partner-slot {
+      height: 90px;
+    }
+
+    .partner-slot img {
+      max-height: 62px;
+    }
+  }
+
+</style>
+</head>
+
+
+<body>
+
+
+<!-- =========================================================
+     HEADER
+     ========================================================= -->
+
+<header>
+
+  <!-- Manor House logo -->
+  <div class="header-logo left-logo">
+
+    <img
+      src="assets/MHAC.png"
+      alt="Manor House Agricultural Centre"
+    >
+
+  </div>
+
+
+  <!-- Dashboard title -->
+  <div class="title-block">
+
+    <h1>
+      Kenya AE Hub - Farmer Trainings Dashboard
+    </h1>
+
+    <p>
+      Baseline &rarr; Endline evaluation across five training days on Agroecology Practices
+    </p>
+
+  </div>
+
+
+  <!-- CFHF logo -->
+  <div class="header-logo right-logo">
+
+    <img
+      src="assets/CFHFLogo.png"
+      alt="CFHF"
+    >
+
+  </div>
+
+
+  <!-- Existing metadata -->
+  <div class="meta">
+
+    <div id="generatedDate"></div>
+
+    <div id="dataSourceNote"></div>
+
+  </div>
+
+</header>
+
+
+
+<!-- =========================================================
+     TABS
+     ========================================================= -->
+
+<nav class="tabs" id="tabNav"></nav>
+
+
+
+<!-- =========================================================
+     MAIN DASHBOARD
+     ========================================================= -->
+
+<main id="mainContent"></main>
+
+
+
+<!-- =========================================================
+     LIGHTBOX
+     ========================================================= -->
+
+<div id="lightbox">
+
+  <img
+    id="lightboxImg"
+    src=""
+    alt=""
+  >
+
+</div>
+
+
+
+<!-- =========================================================
+     PARTNER ORGANIZATIONS
+     ========================================================= -->
+
+<section class="partner-section">
+
+  <h2>
+    Partner Organizations involved in the project
+  </h2>
+
+
+  <div
+    class="partner-carousel"
+    id="partnerCarousel"
+  >
+
+    <!--
+      These five slots remain fixed.
+      JavaScript changes the logo inside each slot.
+    -->
+
+    <div class="partner-slot">
+      <img
+        src="assets/CrepLogo.jpg"
+        alt="CREP"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/KalroLogo.jpg"
+        alt="KALRO"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/DIGLogo.png"
+        alt="DIG"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/RodiLogo.png"
+        alt="RODI"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/SofdiLogo.jpg"
+        alt="SOFDI"
+      </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+
+<footer>
+
+  Built for Kenya AE Hub and Partner Organizations.
+  Figures reflect matched baseline/endline records only,
+  unless noted.
+
+</footer>
+
+
+
+<!-- =========================================================
+     EXISTING DASHBOARD FILES
+     ========================================================= -->
+
+<script src="dashboard_data.js"></script>
+
+<script src="app.js"></script>
+
+
+
+<!-- =========================================================
+     PARTNER LOGO FADE CAROUSEL
+     ========================================================= -->
+
+<script>
+
+  /*
+   * Partner logos used in the project.
+   *
+   * The first five are displayed initially.
+   * The remaining two rotate into the five available positions.
+   */
+
+  const partnerOrganizations = [
+
+    {
+      name: "CREP",
+      logo: "assets/CrepLogo.jpg"
+    },
+      {
+      name: "MANOR HOUSE",
+      logo: "assets/ManorHouseLogo.png"
+    },
+      {
+      name: "RFRN",
+      logo: "assets/rfrnlogo.png"
+    },
+    {
+      name: "KALRO",
+      logo: "assets/KalroLogo.jpg"
+    },
+
+    {
+      name: "DIG",
+      logo: "assets/DIGLogo.png"
+    },
+
+    {
+      name: "RODI",
+      logo: "assets/RodiLogo.png"
+    },
+
+    {
+      name: "SOFDI",
+      logo: "assets/SofdiLogo.jpg"
+    },
+
+    {
+      name: "FIPS",
+      logo: "assets/FipsLogo.png"
+    },
+    {
+      name: "KCWCG",
+      logo: "assets/KipsainaLogo.jpg"
+    },
+    {
+      name: "Tembea",
+      logo: "assets/TembeaLogo.png"
+    }
+
+  ];
+
+
+  /*
+   * Get the five fixed display positions.
+   */
+
+  const partnerSlots =
+    document.querySelectorAll(".partner-slot");
+
+
+  /*
+   * Starting position.
+   *
+   * Initially:
+   *
+   * CREP
+   * KALRO
+   * DIG
+   * RODI
+   * SOFDI
+   */
+
+  let partnerStartIndex = 0;
+
+
+  /*
+   * Change one logo at a time.
+   *
+   * Example:
+   *
+   * CREP | KALRO | DIG | RODI | SOFDI
+   *
+   * becomes
+   *
+   * KALRO | DIG | RODI | SOFDI | FIPS
+   *
+   * then
+   *
+   * DIG | RODI | SOFDI | FIPS | TEMBEA
+   *
+   * and eventually loops back around.
+   */
+
+  function rotatePartnerLogo() {
+
+    /*
+     * Determine which position will change.
+     *
+     * We rotate the first visible position.
+     */
+
+    const changingSlotIndex =
+      partnerStartIndex % partnerSlots.length;
+
+
+    const slot =
+      partnerSlots[changingSlotIndex];
+
+
+    /*
+     * Fade the current logo out.
+     */
+
+    slot.classList.remove("fade-in");
+
+    slot.classList.add("fade-out");
+
+
+    /*
+     * Once the fade-out is complete,
+     * replace the logo.
+     */
+
+    setTimeout(function() {
+
+      /*
+       * Move forward through the complete
+       * partner organization list.
+       */
+
+      partnerStartIndex =
+        (partnerStartIndex + 1) %
+        partnerOrganizations.length;
+
+
+      /*
+       * Determine the new logo for this position.
+       *
+       * The formula ensures that the five
+       * positions always show consecutive
+       * organizations.
+       */
+
+      const newLogoIndex =
+        (
+          partnerStartIndex +
+          partnerSlots.length - 1
+        ) %
+        partnerOrganizations.length;
+
+
+      const newPartner =
+        partnerOrganizations[newLogoIndex];
+
+
+      /*
+       * Replace the image.
+       */
+
+      const image =
+        slot.querySelector("img");
+
+
+      image.src =
+        newPartner.logo;
+
+
+      image.alt =
+        newPartner.name;
+
+
+      /*
+       * Allow the browser a moment to register
+       * the new image before fading it in.
+       */
+
+      setTimeout(function() {
+
+        slot.classList.remove("fade-out");
+
+        slot.classList.add("fade-in");
+
+      }, 50);
+
+
+    }, 1000);
+
+  }
+
+
+  /*
+   * Rotate a logo every 4 seconds.
+   */
+
+  setInterval(
+    rotatePartnerLogo,
+    4000
+  );
+
+</script>
+
+
+</body>
+</html>

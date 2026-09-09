@@ -1,0 +1,22 @@
+# Python virtual environments
+.venv/
+.venv-1/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Source datasets - KEEP PRIVATE
+*.xlsx
+*.xls
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python development
+.pytest_cache/
+.mypy_cache/
