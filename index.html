@@ -622,6 +622,382 @@
 
 
   /* =========================================================
+     PROJECT BACKGROUND
+     ========================================================= */
+
+  .bg-hero {
+    background:
+      url("assets/hero-background.jpg") center / cover no-repeat;
+
+    border-radius: 8px;
+
+    padding: 44px 40px;
+
+    margin-bottom: 26px;
+
+    color: #FBFAF3;
+
+    box-shadow: var(--shadow);
+
+    position: relative;
+
+    overflow: hidden;
+
+    min-height: 340px;
+
+    display: flex;
+
+    align-items: center;
+  }
+
+  /* Darkens the left side over the photo so white text stays readable,
+     fading out toward the right where the foliage lives. */
+  .bg-hero::before {
+    content: "";
+
+    position: absolute;
+
+    inset: 0;
+
+    background:
+      linear-gradient(
+        to right,
+        rgba(20,30,20,0.82) 0%,
+        rgba(20,30,20,0.62) 32%,
+        rgba(20,30,20,0.22) 58%,
+        rgba(20,30,20,0) 78%
+      );
+
+    z-index: 1;
+  }
+
+  /* Content sits above the animated scene */
+  .bg-hero-content {
+    position: relative;
+
+    z-index: 2;
+  }
+
+  /* =========================================================
+     SUBTLE ANIMATED OVERLAY (dust + light rain over the photo)
+     ========================================================= */
+
+  .bg-hero-scene {
+    position: absolute;
+
+    inset: 0;
+
+    overflow: hidden;
+
+    z-index: 1;
+
+    pointer-events: none;
+  }
+
+  .bg-dust {
+    position: absolute;
+
+    width: 3px;
+    height: 3px;
+
+    border-radius: 50%;
+
+    background: rgba(255,250,235,0.6);
+
+    opacity: 0;
+
+    animation: bgDustFloat 9s ease-in-out infinite;
+  }
+
+  .bg-rain {
+    position: absolute;
+
+    top: -10%;
+
+    width: 1px;
+    height: 34px;
+
+    background:
+      linear-gradient(to bottom, rgba(220,236,255,0) 0%, rgba(220,236,255,0.5) 50%, rgba(220,236,255,0) 100%);
+
+    opacity: 0;
+
+    animation: bgRainFall 3.6s linear infinite;
+  }
+
+  @keyframes bgDustFloat {
+    0%   { opacity: 0; transform: translate(0, 0); }
+    12%  { opacity: 0.6; }
+    50%  { opacity: 0.7; transform: translate(6px, -26px); }
+    88%  { opacity: 0.2; }
+    100% { opacity: 0; transform: translate(-4px, -52px); }
+  }
+
+  @keyframes bgRainFall {
+    0%   { opacity: 0; transform: translateY(0); }
+    10%  { opacity: 0.5; }
+    85%  { opacity: 0.35; }
+    100% { opacity: 0; transform: translateY(120px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bg-dust, .bg-rain {
+      animation: none !important;
+    }
+  }
+
+  .bg-hero .eyebrow {
+    text-transform: uppercase;
+
+    letter-spacing: 0.12em;
+
+    font-size: 11.5px;
+
+    color: var(--ochre-soft);
+
+    font-weight: 600;
+
+    margin-bottom: 10px;
+  }
+
+  .bg-hero h1 {
+    font-size: 30px;
+
+    color: #fff;
+
+    max-width: 760px;
+  }
+
+  .bg-hero p.lead {
+    margin-top: 14px;
+
+    max-width: 700px;
+
+    font-size: 14.5px;
+
+    line-height: 1.65;
+
+    color: rgba(251,250,243,0.92);
+  }
+
+  .bg-hero .cta-row {
+    margin-top: 22px;
+
+    display: flex;
+
+    gap: 12px;
+
+    flex-wrap: wrap;
+  }
+
+  .bg-hero button.btn.primary {
+    background: var(--ochre);
+
+    border-color: var(--ochre);
+
+    color: var(--ink);
+
+    font-weight: 600;
+  }
+
+  .bg-hero button.btn.ghost {
+    background: transparent;
+
+    color: #fff;
+
+    border-color: rgba(255,255,255,0.5);
+  }
+
+  .bg-stat-row {
+    display: grid;
+
+    grid-template-columns:
+      repeat(auto-fit, minmax(140px, 1fr));
+
+    gap: 14px;
+
+    margin-bottom: 26px;
+  }
+
+  .bg-stat-card {
+    background: var(--panel);
+
+    border: 1px solid var(--line);
+
+    border-left: 4px solid var(--ochre);
+
+    border-radius: 6px;
+
+    padding: 16px 16px;
+
+    text-align: center;
+
+    box-shadow: var(--shadow);
+  }
+
+  .bg-stat-card .n {
+    font-family: "Source Serif 4", Georgia, serif;
+
+    font-size: 30px;
+
+    color: var(--ink);
+
+    line-height: 1;
+  }
+
+  .bg-stat-card .l {
+    margin-top: 6px;
+
+    font-size: 11.5px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 0.03em;
+
+    color: var(--ink-muted);
+  }
+
+  .bg-section-grid {
+    display: grid;
+
+    grid-template-columns: 1.15fr 1fr;
+
+    gap: 22px;
+
+    margin-bottom: 24px;
+  }
+
+  @media (max-width: 900px) {
+    .bg-section-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .bg-body p {
+    margin: 0 0 12px;
+
+    font-size: 13.8px;
+
+    line-height: 1.7;
+
+    color: var(--ink);
+  }
+
+  .bg-body p:last-child {
+    margin-bottom: 0;
+  }
+
+  .quote-block {
+    border-left: 3px solid var(--green);
+
+    background: var(--green-soft);
+
+    padding: 14px 18px;
+
+    border-radius: 0 6px 6px 0;
+
+    font-size: 13.5px;
+
+    line-height: 1.6;
+
+    color: var(--ink);
+
+    font-style: italic;
+
+    margin: 16px 0;
+  }
+
+  .process-steps {
+    display: grid;
+
+    gap: 14px;
+  }
+
+  .process-step {
+    display: flex;
+
+    gap: 14px;
+
+    align-items: flex-start;
+  }
+
+  .process-step .step-num {
+    flex: 0 0 auto;
+
+    width: 30px;
+    height: 30px;
+
+    border-radius: 50%;
+
+    background: var(--navy);
+
+    color: #fff;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    font-family: "Source Serif 4", Georgia, serif;
+
+    font-size: 14px;
+  }
+
+  .process-step .step-text h4 {
+    margin: 2px 0 3px;
+
+    font-size: 13.5px;
+
+    font-weight: 600;
+
+    color: var(--ink);
+  }
+
+  .process-step .step-text p {
+    margin: 0;
+
+    font-size: 12.8px;
+
+    color: var(--ink-muted);
+
+    line-height: 1.55;
+  }
+
+  .limitation-box {
+    background: var(--rust-soft);
+
+    border: 1px solid var(--rust);
+
+    border-radius: 6px;
+
+    padding: 18px 20px;
+  }
+
+  .limitation-box h2 {
+    color: var(--rust);
+
+    font-size: 16px;
+
+    margin-bottom: 10px;
+  }
+
+  .limitation-box p {
+    font-size: 13.2px;
+
+    line-height: 1.65;
+
+    color: var(--ink);
+
+    margin: 0 0 10px;
+  }
+
+  .limitation-box p:last-child {
+    margin-bottom: 0;
+  }
+
+
+  /* =========================================================
      OVERVIEW
      ========================================================= */
 
@@ -977,14 +1353,27 @@
   >
 
     <!--
-      These five slots remain fixed.
-      JavaScript changes the logo inside each slot.
+      All ten partner logos, shown statically in two rows of five.
     -->
 
     <div class="partner-slot">
       <img
         src="assets/CrepLogo.jpg"
         alt="CREP"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/ManorHouseLogo.png"
+        alt="MANOR HOUSE"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/rfrnlogo.png"
+        alt="RFRN"
       >
     </div>
 
@@ -1013,7 +1402,29 @@
       <img
         src="assets/SofdiLogo.jpg"
         alt="SOFDI"
-      </div>
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/FipsLogo.png"
+        alt="FIPS"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/KipsainaLogo.jpg"
+        alt="KCWCG"
+      >
+    </div>
+
+    <div class="partner-slot">
+      <img
+        src="assets/TembeaLogo.png"
+        alt="Tembea"
+      >
+    </div>
 
   </div>
 
@@ -1043,219 +1454,6 @@
 
 <script src="app.js"></script>
 
-
-
-<!-- =========================================================
-     PARTNER LOGO FADE CAROUSEL
-     ========================================================= -->
-
-<script>
-
-  /*
-   * Partner logos used in the project.
-   *
-   * The first five are displayed initially.
-   * The remaining two rotate into the five available positions.
-   */
-
-  const partnerOrganizations = [
-
-    {
-      name: "CREP",
-      logo: "assets/CrepLogo.jpg"
-    },
-      {
-      name: "MANOR HOUSE",
-      logo: "assets/ManorHouseLogo.png"
-    },
-      {
-      name: "RFRN",
-      logo: "assets/rfrnlogo.png"
-    },
-    {
-      name: "KALRO",
-      logo: "assets/KalroLogo.jpg"
-    },
-
-    {
-      name: "DIG",
-      logo: "assets/DIGLogo.png"
-    },
-
-    {
-      name: "RODI",
-      logo: "assets/RodiLogo.png"
-    },
-
-    {
-      name: "SOFDI",
-      logo: "assets/SofdiLogo.jpg"
-    },
-
-    {
-      name: "FIPS",
-      logo: "assets/FipsLogo.png"
-    },
-    {
-      name: "KCWCG",
-      logo: "assets/KipsainaLogo.jpg"
-    },
-    {
-      name: "Tembea",
-      logo: "assets/TembeaLogo.png"
-    }
-
-  ];
-
-
-  /*
-   * Get the five fixed display positions.
-   */
-
-  const partnerSlots =
-    document.querySelectorAll(".partner-slot");
-
-
-  /*
-   * Starting position.
-   *
-   * Initially:
-   *
-   * CREP
-   * KALRO
-   * DIG
-   * RODI
-   * SOFDI
-   */
-
-  let partnerStartIndex = 0;
-
-
-  /*
-   * Change one logo at a time.
-   *
-   * Example:
-   *
-   * CREP | KALRO | DIG | RODI | SOFDI
-   *
-   * becomes
-   *
-   * KALRO | DIG | RODI | SOFDI | FIPS
-   *
-   * then
-   *
-   * DIG | RODI | SOFDI | FIPS | TEMBEA
-   *
-   * and eventually loops back around.
-   */
-
-  function rotatePartnerLogo() {
-
-    /*
-     * Determine which position will change.
-     *
-     * We rotate the first visible position.
-     */
-
-    const changingSlotIndex =
-      partnerStartIndex % partnerSlots.length;
-
-
-    const slot =
-      partnerSlots[changingSlotIndex];
-
-
-    /*
-     * Fade the current logo out.
-     */
-
-    slot.classList.remove("fade-in");
-
-    slot.classList.add("fade-out");
-
-
-    /*
-     * Once the fade-out is complete,
-     * replace the logo.
-     */
-
-    setTimeout(function() {
-
-      /*
-       * Move forward through the complete
-       * partner organization list.
-       */
-
-      partnerStartIndex =
-        (partnerStartIndex + 1) %
-        partnerOrganizations.length;
-
-
-      /*
-       * Determine the new logo for this position.
-       *
-       * The formula ensures that the five
-       * positions always show consecutive
-       * organizations.
-       */
-
-      const newLogoIndex =
-        (
-          partnerStartIndex +
-          partnerSlots.length - 1
-        ) %
-        partnerOrganizations.length;
-
-
-      const newPartner =
-        partnerOrganizations[newLogoIndex];
-
-
-      /*
-       * Replace the image.
-       */
-
-      const image =
-        slot.querySelector("img");
-
-
-      image.src =
-        newPartner.logo;
-
-
-      image.alt =
-        newPartner.name;
-
-
-      /*
-       * Allow the browser a moment to register
-       * the new image before fading it in.
-       */
-
-      setTimeout(function() {
-
-        slot.classList.remove("fade-out");
-
-        slot.classList.add("fade-in");
-
-      }, 50);
-
-
-    }, 1000);
-
-  }
-
-
-  /*
-   * Rotate a logo every 4 seconds.
-   */
-
-  setInterval(
-    rotatePartnerLogo,
-    4000
-  );
-
-</script>
 
 
 </body>

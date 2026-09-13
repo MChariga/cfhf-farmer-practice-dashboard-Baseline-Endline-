@@ -166,6 +166,7 @@ if __name__ == "__main__":
     matched_exact = 0
     matched_fuzzy = 0
     unmatched_names = set()
+    matched_fids_by_day = {d: set() for d in [1, 2, 3, 4, 5]}
     for r in data["records"]:
         crosswalk = day_crosswalks[r["day"]]
         key = norm_name(r["farmerName"])
@@ -184,6 +185,7 @@ if __name__ == "__main__":
             r["organization"] = entry["organization"]
             r["county"] = entry["county"]
             r["tenure"] = tenure_lookup.get(entry["Farmer_ID"], r["tenure"])
+            matched_fids_by_day[r["day"]].add(entry["Farmer_ID"])
         else:
             unmatched_names.add((r["day"], r["farmerName"]))
 
@@ -195,10 +197,10 @@ if __name__ == "__main__":
           f"kept their original organization/county/tenure because no confident "
           f"match was found in the raw file for that day.")
 
-    # Recompute per-day meta from the raw file (true survey counts), but keep
-    # nMatched as the count of unique (corrected) farmers actually present in
-    # this day's existing records - i.e. still driven by the already-cleaned
-    # adoption data, not recomputed from raw.
+    # Recompute per-day meta from the raw file (true survey counts). nMatched
+    # now comes from matched_fids_by_day (tracked by Farmer_ID during the
+    # matching pass above), not recomputed from raw - it still reflects the
+    # already-cleaned adoption data, just keyed more reliably.
     #
     # "Endline surveyed" per day uses the GLOBAL found-at-endline set (any
     # day), not just that day's own endline rows: a farmer who genuinely had
@@ -208,19 +210,43 @@ if __name__ == "__main__":
     # they were part of Day N's baseline). Only true baseline attendance
     # varies by day; being "found at endline" is a property of the farmer,
     # not of the day.
-    def farmer_key(r):
-        return f"{r['farmerName'].strip().lower()}|{r['organization'].strip().lower()}|{r['county'].strip().lower()}"
-
     for meta in data["days"]:
         day_num = meta["day"]
-        _, baseline_ids, _ = build_day_identity_crosswalk(day_num)
-        day_records = [r for r in data["records"] if r["day"] == day_num]
-        n_matched_now = len({farmer_key(r) for r in day_records})
+        crosswalk, baseline_ids, endline_ids_this_day = build_day_identity_crosswalk(day_num)
+        matched_fids = matched_fids_by_day[day_num]
+        n_matched_now = len(matched_fids)
         found_this_day = baseline_ids & global_endline_ids
         meta["nBaselineSurveyed"] = len(baseline_ids)
         meta["nEndlineSurveyed"] = len(found_this_day)
         meta["nNotFoundEndline"] = len(baseline_ids - global_endline_ids)
         meta["nMatched"] = n_matched_now
+
+        # Every farmer who appears in this day's raw sheet at all (baseline
+        # and/or endline row), with identity + status flags - this is what
+        # lets the dashboard's filters apply correctly to every KPI card,
+        # including "not found at endline", instead of only to farmers who
+        # made it into the matched adoption `records`. "matched" is tracked
+        # directly by Farmer_ID (collected above, during the same fuzzy/
+        # exact name-matching pass used to correct org/county/tenure) rather
+        # than reconstructed from a name+org+county key, since a fuzzy-
+        # matched record's farmerName can differ slightly from the raw
+        # file's canonical name and would silently fail a key rebuild.
+        farmers = []
+        for entry in crosswalk.values():
+            fid = entry["Farmer_ID"]
+            farmers.append({
+                "farmerId": int(fid),
+                "farmerName": entry["name"],
+                "organization": entry["organization"],
+                "county": entry["county"],
+                "tenure": tenure_lookup.get(fid, "Unknown"),
+                "atBaseline": fid in baseline_ids,
+                "atEndlineThisDay": fid in endline_ids_this_day,
+                "foundAtEndlineAnyDay": fid in global_endline_ids,
+                "matched": fid in matched_fids,
+            })
+        farmers.sort(key=lambda x: x["farmerName"].lower())
+        meta["farmers"] = farmers
 
     data["overall"] = {
         "nUniqueFarmersTotal": len(global_baseline_ids),

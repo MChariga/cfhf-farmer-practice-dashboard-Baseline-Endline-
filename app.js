@@ -7,7 +7,7 @@
 const DOWNLOAD_PASSWORD = "Kenya_AE_Hub@2026";
 
 const STATE = {
-  activeTab: "overview",
+  activeTab: "background",
   filters: {}, // keyed by day number -> {organization, county, farmerSearch, practice, baselineStatus, endlineStatus}
   sort: {},    // keyed by day number -> {col, dir}
   charts: {},  // keyed by canvas id -> Chart.js instance, so we can destroy before redraw
@@ -24,6 +24,12 @@ const COLORS = {
   ink: "#1E2A1F",
   inkMuted: "#5B6B5C",
   line: "#DAD6C2",
+  // "Not doing" fills for the tenure comparison chart: New and Old each get
+  // their own muted tone (a desaturated tint of that group's "doing" color)
+  // so a New-not-doing segment and an Old-not-doing segment never look the
+  // same, while still reading as visibly "less saturated" than "doing".
+  notDoingNew: "#B7C9AE",
+  notDoingOld: "#DDBFA0",
 };
 
 function defaultFilters() {
@@ -59,6 +65,27 @@ function uniqueFarmerCount(records) {
 
 function distinctSorted(records, field) {
   return Array.from(new Set(records.map((r) => r[field]).filter(Boolean))).sort();
+}
+
+// --- Farmer identity list (every farmer who appears in this day's raw
+// sheet at all, baseline and/or endline - not just the ones with complete
+// data used in the adoption charts). This is what lets the organization/
+// county/name/tenure filters apply correctly to every KPI card, including
+// "not found at endline", instead of only to farmers who made it into the
+// per-question `records`. ---
+function farmersForDay(day) {
+  const meta = dayMeta(day);
+  return (meta && meta.farmers) || [];
+}
+
+function applyIdentityFilters(farmers, f) {
+  return farmers.filter((p) => {
+    if (f.organization !== "All" && p.organization !== f.organization) return false;
+    if (f.county !== "All" && p.county !== f.county) return false;
+    if (f.farmerSearch && !p.farmerName.toLowerCase().includes(f.farmerSearch.toLowerCase())) return false;
+    if (f.tenure !== "All" && p.tenure !== f.tenure) return false;
+    return true;
+  });
 }
 
 function distinctQuestions(records) {
@@ -104,9 +131,12 @@ function summarizeByPractice(records) {
   });
   const out = [];
   byQ.forEach((v, q) => {
-    const baseAvg = pct(v.base.reduce((a, b) => a + b, 0), v.base.length);
-    const endAvg = pct(v.end.reduce((a, b) => a + b, 0), v.end.length);
-    out.push({ question: q, label: v.label, basePct: baseAvg, endPct: endAvg, change: endAvg - baseAvg, n: v.base.length });
+    const baseCount = v.base.reduce((a, b) => a + b, 0);
+    const endCount = v.end.reduce((a, b) => a + b, 0);
+    const n = v.base.length;
+    const baseAvg = pct(baseCount, n);
+    const endAvg = pct(endCount, n);
+    out.push({ question: q, label: v.label, baseCount, endCount, basePct: baseAvg, endPct: endAvg, change: endAvg - baseAvg, n });
   });
   out.sort((a, b) => b.change - a.change);
   return out;
@@ -177,7 +207,7 @@ function destroyChart(id) {
 function renderTabs() {
   const nav = document.getElementById("tabNav");
   nav.innerHTML = "";
-  const tabs = [{ id: "overview", label: "Overview" }, ...DASHBOARD_DATA.days.map((d) => ({ id: `day${d.day}`, label: d.title }))];
+  const tabs = [{ id: "background", label: "Project Background" }, { id: "overview", label: "Overview" }, ...DASHBOARD_DATA.days.map((d) => ({ id: `day${d.day}`, label: d.title }))];
   tabs.forEach((t) => {
     const btn = document.createElement("button");
     btn.textContent = t.label;
@@ -194,12 +224,179 @@ function renderTabs() {
 function renderMain() {
   const main = document.getElementById("mainContent");
   main.innerHTML = "";
-  if (STATE.activeTab === "overview") {
+  if (STATE.activeTab === "background") {
+    main.appendChild(buildBackgroundView());
+  } else if (STATE.activeTab === "overview") {
     main.appendChild(buildOverviewView());
   } else {
     const day = parseInt(STATE.activeTab.replace("day", ""), 10);
     main.appendChild(buildDayView(day));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Project Background tab
+// ---------------------------------------------------------------------------
+function buildBackgroundView() {
+  const wrap = document.createElement("section");
+  wrap.className = "view active";
+
+  const dust = [
+    bgDust(6, 55, 0),   bgDust(14, 65, 2.2), bgDust(22, 50, 4.1),
+    bgDust(30, 70, 1.1), bgDust(10, 60, 3.4), bgDust(26, 46, 0.7),
+  ].join("");
+
+  const rain = [
+    bgRain(48, 0),   bgRain(58, 0.6), bgRain(68, 1.3),
+    bgRain(52, 0.3), bgRain(62, 1.0), bgRain(72, 1.8),
+  ].join("");
+
+  wrap.innerHTML = `
+    <div class="bg-hero">
+      <div class="bg-hero-scene" aria-hidden="true">
+        ${rain}
+        ${dust}
+      </div>
+      <div class="bg-hero-content">
+        <div class="eyebrow">Kenya Agroecology Hub &middot; CFHF Project Evaluation</div>
+        <h1>Improving Farmer Training on AE Practices Through Collaboration and Follow-up</h1>
+        <p class="lead">
+          An endline evaluation of what farmers actually put into practice after Manor House
+          Agricultural Centre's one-week agroecology trainings and an honest look  at
+          what got in the way when they didn't.
+        </p>
+        <div class="cta-row">
+          <button class="btn primary" id="bgGoOverview">Explore the Dashboard &rarr;</button>
+          <button class="btn ghost" id="bgGoDay1">Jump to Day 1: Soil Health</button>
+        </div>
+      </div>
+    </div>
+
+    
+    <div class="bg-section-grid">
+      <div class="panel bg-body">
+        <h2>Programme Context</h2>
+        <div class="panel-sub">Why this evaluation exists</div>
+        <p>
+          The Kenya Agroecology Hub, anchored at Manor House Agricultural Centre (MHAC),
+          received funding from the Conservation, Food and Health Foundation (CFHF) to
+          implement <em>"Improving Farmer Training on AE Practices Through Collaboration
+          and Follow-up."</em>
+        </p>
+        <p>
+          The project aimed to improve the impact of the one-week agroecology (AE) training
+          for farmers through joint assessment of the AE concepts and practices farmers were
+          putting into practice on their farms after training and those they were not.
+        </p>
+        <p>
+          It was implemented with ten partner organizations across nine counties, covering
+          42 sub-counties and involving 215 farmers from the western part of the country.
+          Workshops ran in five cohorts of roughly 40 farmers each, five from every partner
+          organization, who were then expected to form their own farmer groups to sustain
+          learning and sharing after the workshop.
+        </p>
+        <p>
+          A baseline assessment during each workshop captured where farmers already stood
+          on AE practices. Farmers were then given one and a half seasons to put what they
+          learned into practice, before a joint endline follow-up was carried out by partner
+          organization staff together with MHAC staff.
+        </p>
+      </div>
+
+      <div class="panel bg-body">
+        <h2>Evaluation Purpose &amp; Objectives</h2>
+        <div class="panel-sub">What we set out to learn</div>
+        <p>
+          The purpose of this endline evaluation was to reveal which new AE concepts and
+          practices farmers were implementing or not embracing after MHAC's
+          one-week workshop, and to explore, qualitatively, the barriers behind non-adoption.
+        </p>
+        <p>
+          MHAC has long relied on internal learning systems such as end-of-workshop surveys
+          and informal daily reflections. This assessment tested whether there is a
+          disconnect between MHAC's assumptions about what is working and the actual
+          situation on farmers' farms.
+        </p>
+        <div class="quote-block">
+          Is low adoption a communication gap on the trainers' side, a mismatch between
+          what MHAC assumed was relevant, or a mismatch with what farmers themselves saw
+          as relevant and achievable in their own context?
+        </div>
+        <p>
+          Answering that question is what every chart in this dashboard is ultimately
+          built to inform.
+        </p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Methodology</h2>
+      <div class="panel-sub">How the baseline and endline data behind this dashboard were collected</div>
+      <div class="process-steps">
+        ${bgStep("1", "Structured, practice-by-practice questionnaire", "Built around the practices taught in the one-week workshop, with a simple yes/no for whether a farmer was doing each one, adapted to also capture in-depth reasons behind every \u201cno.\u201d")}
+        ${bgStep("2", "Full census, not a fixed sample", "Every farmer who attended was targeted for assessment, rather than working from a pre-set sample size, since some farmers were expected to be unavailable during the visit window.")}
+        ${bgStep("3", "Piloted before rollout", "The data tool was piloted with 20 farmers in Trans Nzoia County, and revised based on what that pilot surfaced.")}
+        ${bgStep("4", "Two-phase farm visits", "Farmers first walked the evaluation team through their farm to show what had been implemented since training, then sat down for the structured questionnaire, including reasons for practices not seen.")}
+        ${bgStep("5", "Joint MHAC &amp; partner teams", "Two evaluation teams, each pairing MHAC staff with personnel from the local partner organization that had supported entry to farmers, carried out the visits and met daily to reflect and share learning.")}
+      </div>
+    </div>
+
+    <div class="limitation-box">
+      <h2>Limitations of the Evaluation</h2>
+      <p>
+        The tool captured rich qualitative depth on what farmers were and were not
+        implementing, but it cannot show the extent to which a farmer is implementing a
+        given practice.
+      </p>
+      <p>
+        Visit timing also did not always align with the prime period for farmers to have
+        something to show: many had already harvested short-maturity crops, or their farms
+        had been disrupted by weather. Some practices farmers reported doing therefore had
+        no visible evidence on the day, and the evaluation team relied on farmers'
+        good faith in those cases.
+      </p>
+    </div>
+  `;
+
+  wrap.querySelector("#bgGoOverview").addEventListener("click", () => {
+    STATE.activeTab = "overview";
+    renderTabs();
+    renderMain();
+  });
+  wrap.querySelector("#bgGoDay1").addEventListener("click", () => {
+    STATE.activeTab = "day1";
+    renderTabs();
+    renderMain();
+  });
+
+  return wrap;
+}
+
+function bgStat(n, label) {
+  return `<div class="bg-stat-card"><div class="n">${n}</div><div class="l">${label}</div></div>`;
+}
+
+function bgStep(num, title, body) {
+  return `
+    <div class="process-step">
+      <div class="step-num">${num}</div>
+      <div class="step-text">
+        <h4>${title}</h4>
+        <p>${body}</p>
+      </div>
+    </div>
+  `;
+}
+
+// Decorative animated overlay for the hero banner (see .bg-hero-scene CSS):
+// a few drifting dust/pollen specks and light rain streaks over the photo,
+// confined to the right side so the text on the left stays clean and readable.
+function bgDust(top, right, delay) {
+  return `<span class="bg-dust" style="top:${top}%; right:${right}%; animation-delay:${delay}s;"></span>`;
+}
+
+function bgRain(right, delay) {
+  return `<span class="bg-rain" style="right:${right}%; animation-delay:${delay}s;"></span>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,9 +414,9 @@ function buildOverviewView() {
   kpis.className = "kpi-row";
   kpis.innerHTML = `
     ${kpiCard("Training Days Covered", DASHBOARD_DATA.days.length, "Day 1 - Day 5", "navy")}
-    ${kpiCard("Unique Farmers (All Days)", overall.nUniqueFarmersTotal, "Deduplicated by Name + Organization + County", "green")}
-    ${kpiCard("Found at Endline (Any Day)", overall.nUniqueFoundEndlineAny, "At least one day they took part in", "green")}
-    ${kpiCard("Never Found at Endline", overall.nUniqueNotFoundEndlineAny, "Across every day they took part in", "rust")}
+    ${kpiCard("Total Number of Farmers Trained", overall.nUniqueFarmersTotal, "Attended at least one workshop day", "green")}
+    ${kpiCard("Found at Endline", overall.nUniqueFoundEndlineAny, "Number reached during follow-up", "green")}
+    ${kpiCard("Never Found at Endline", overall.nUniqueNotFoundEndlineAny, "Number not reached during follow-up", "rust")}
     ${kpiCard("Organizations", allOrgs.length, allOrgs.slice(0, 3).join(", ") + (allOrgs.length > 3 ? "..." : ""), "ochre")}
     ${kpiCard("Counties", allCounties.length, allCounties.slice(0, 3).join(", ") + (allCounties.length > 3 ? "..." : ""), "ochre")}
   `;
@@ -400,22 +597,27 @@ function buildDayView(day) {
 
   const meta = dayMeta(day);
   const allRecords = recordsForDay(day);
+  const allFarmers = farmersForDay(day);
   const f = STATE.filters[day];
 
   const wrap = document.createElement("section");
   wrap.className = "view active";
 
   // --- Toolbar ---
-  // Organization/County/Tenure options are narrowed by whichever of the
-  // other identity filters (org/county/name/tenure) are already set, so
-  // picking a County only offers Organizations that actually appear there,
-  // and vice versa, instead of always listing every value in the day.
+  // Organization/County/Tenure options come from the full farmer identity
+  // list (every farmer who appears in this day's raw sheet at all), not
+  // just `allRecords` (which only holds farmers with complete matched
+  // data) - otherwise an organization with baseline-only farmers and zero
+  // matched records would silently disappear from the dropdown. Options
+  // are narrowed by whichever of the other identity filters are already
+  // set, so picking a County only offers Organizations that actually
+  // appear there, and vice versa.
   function optionsFor(field) {
-    const scoped = allRecords.filter((r) => {
-      if (field !== "organization" && f.organization !== "All" && r.organization !== f.organization) return false;
-      if (field !== "county" && f.county !== "All" && r.county !== f.county) return false;
-      if (field !== "tenure" && f.tenure !== "All" && r.tenure !== f.tenure) return false;
-      if (f.farmerSearch && !r.farmerName.toLowerCase().includes(f.farmerSearch.toLowerCase())) return false;
+    const scoped = allFarmers.filter((p) => {
+      if (field !== "organization" && f.organization !== "All" && p.organization !== f.organization) return false;
+      if (field !== "county" && f.county !== "All" && p.county !== f.county) return false;
+      if (field !== "tenure" && f.tenure !== "All" && p.tenure !== f.tenure) return false;
+      if (f.farmerSearch && !p.farmerName.toLowerCase().includes(f.farmerSearch.toLowerCase())) return false;
       return true;
     });
     return distinctSorted(scoped, field);
@@ -504,16 +706,27 @@ function buildDayView(day) {
   });
   const fullyFiltered = applyFilters(allRecords, f);
 
+  // Every KPI card below is driven by the farmer identity list, filtered by
+  // organization/county/name/tenure - so picking an organization correctly
+  // narrows baseline/endline/not-found/matched counts, not just the
+  // "Currently Filtered" card.
+  const filteredFarmers = applyIdentityFilters(allFarmers, f);
+  const nBaselineFiltered = filteredFarmers.filter((p) => p.atBaseline).length;
+  const nEndlineFiltered = filteredFarmers.filter((p) => p.atEndlineThisDay).length;
+  const notFoundFarmers = filteredFarmers.filter((p) => p.atBaseline && !p.atEndlineThisDay);
+  const nMatchedFiltered = filteredFarmers.filter((p) => p.matched).length;
+
   const kpiRow = document.createElement("div");
   kpiRow.className = "kpi-row";
   kpiRow.innerHTML = `
-    ${kpiCard("Farmers at Baseline", meta.nBaselineSurveyed, "Whole-day survey attendance", "navy")}
-    ${kpiCard("Farmers at Endline", meta.nEndlineSurveyed, "Whole-day survey attendance", "navy")}
-    ${kpiCard("Not Found at Endline", meta.nNotFoundEndline, "Surveyed at baseline only", "rust")}
-    ${kpiCard("Matched in Charts", meta.nMatched, "Complete baseline + endline data", "green")}
-    ${kpiCard("Currently Filtered", uniqueFarmerCount(coreFiltered), "Farmers matching org/county/name/tenure filters", "ochre")}
+    ${kpiCard("Complete Baseline Data", nBaselineFiltered, "Answered all questions at baseline", "navy")}
+    ${kpiCard("Farmers at Endline", nEndlineFiltered, "Followed-up at Endline", "navy")}
+    ${kpiCard("Not Found at Endline", notFoundFarmers.length, "Surveyed at baseline only", "rust")}
+    ${kpiCard("Matched in Charts", nMatchedFiltered, "Complete baseline + endline data", "green")}
+    ${kpiCard("Total Surveyed at Baseline", filteredFarmers.length, "Number of farmers with full/partial data", "ochre")}
   `;
   wrap.appendChild(kpiRow);
+  wrap.appendChild(buildNotFoundPanel(day, notFoundFarmers));
 
   // --- Main content: All Practices vs single-practice drill-down ---
   if (f.practice === "All") {
@@ -527,6 +740,47 @@ function buildDayView(day) {
   wrap.appendChild(buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f));
 
   return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Farmer detail: who was surveyed at baseline but not found at endline
+// (reflects the organization/county/name/tenure filters above).
+// ---------------------------------------------------------------------------
+function buildNotFoundPanel(day, notFoundFarmers) {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  const sorted = [...notFoundFarmers].sort((a, b) => a.farmerName.localeCompare(b.farmerName));
+  panel.innerHTML = `
+    <h2>Farmers Not Found at Endline</h2>
+    <div class="panel-sub">Surveyed at baseline but not reached at endline for this day. Reflects the organization/county/name/tenure filters above.</div>
+    ${sorted.length ? `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th></tr></thead>
+          <tbody>
+            ${sorted.map((p) => `
+              <tr><td>${p.farmerName}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td></tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <span>${sorted.length} farmer(s)</span>
+        <button class="btn" id="export-notfound-${day}">Export list (CSV)</button>
+      </div>
+    ` : `<div class="empty-note">No farmers match the current filters, or every filtered farmer was found at endline.</div>`}
+  `;
+  if (sorted.length) {
+    panel.querySelector(`#export-notfound-${day}`).addEventListener("click", () => {
+      downloadCSV(sorted, [
+        { label: "Farmer", get: (p) => p.farmerName },
+        { label: "Organization", get: (p) => p.organization },
+        { label: "County", get: (p) => p.county },
+        { label: "Tenure", get: (p) => p.tenure },
+      ], `day${day}_not_found_at_endline.csv`);
+    });
+  }
+  return panel;
 }
 
 function buildAllPracticesPanel(day, records) {
@@ -554,6 +808,7 @@ function renderDumbbellChart(canvasId, summary) {
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   const sorted = [...summary].sort((a, b) => a.change - b.change);
+  const maxN = Math.max(1, ...sorted.map((s) => Math.max(s.baseCount, s.endCount)));
   STATE.charts[canvasId] = new Chart(ctx, {
     type: "bar",
     data: {
@@ -561,7 +816,7 @@ function renderDumbbellChart(canvasId, summary) {
       datasets: [
         {
           label: "Baseline to Endline range",
-          data: sorted.map((s) => [Math.min(s.basePct, s.endPct), Math.max(s.basePct, s.endPct)]),
+          data: sorted.map((s) => [Math.min(s.baseCount, s.endCount), Math.max(s.baseCount, s.endCount)]),
           backgroundColor: sorted.map((s) => (s.change >= 0 ? "rgba(63,125,75,0.25)" : "rgba(166,75,42,0.25)")),
           borderColor: sorted.map((s) => (s.change >= 0 ? COLORS.green : COLORS.rust)),
           borderWidth: 1,
@@ -575,18 +830,19 @@ function renderDumbbellChart(canvasId, summary) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Baseline vs Endline (% of farmers)", font: { size: 13 } },
+        title: { display: true, text: "Baseline vs Endline (number of farmers)", font: { size: 13 } },
         legend: { display: false },
         tooltip: {
           callbacks: {
             label: (ctx) => {
               const s = sorted[ctx.dataIndex];
-              return `Baseline ${s.basePct.toFixed(1)}%  ->  Endline ${s.endPct.toFixed(1)}%  (${s.change >= 0 ? "+" : ""}${s.change.toFixed(1)} pp)`;
+              const diff = s.endCount - s.baseCount;
+              return `Baseline ${s.baseCount} -> Endline ${s.endCount} farmers (n=${s.n})  |  Change: ${diff >= 0 ? "+" : ""}${diff} farmers (${s.change >= 0 ? "+" : ""}${s.change.toFixed(1)}pp)`;
             },
           },
         },
       },
-      scales: { x: { min: 0, max: 100, title: { display: true, text: "% of farmers" } } },
+      scales: { x: { min: 0, max: maxN, title: { display: true, text: "Number of farmers" } } },
     },
   });
 }
@@ -595,20 +851,21 @@ function renderQuadrantChart(canvasId, summary) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
+  const maxN = Math.max(1, ...summary.map((s) => Math.max(s.baseCount, s.endCount)));
   STATE.charts[canvasId] = new Chart(ctx, {
     type: "scatter",
     data: {
       datasets: [
         {
           label: "Practices",
-          data: summary.map((s) => ({ x: s.basePct, y: s.endPct, label: s.label, change: s.change })),
+          data: summary.map((s) => ({ x: s.baseCount, y: s.endCount, label: s.label, change: s.change, n: s.n })),
           backgroundColor: summary.map((s) => (s.change >= 0 ? COLORS.green : COLORS.rust)),
           pointRadius: 7,
           pointHoverRadius: 9,
         },
         {
           label: "No change",
-          data: [{ x: 0, y: 0 }, { x: 100, y: 100 }],
+          data: [{ x: 0, y: 0 }, { x: maxN, y: maxN }],
           type: "line",
           borderColor: COLORS.line,
           borderDash: [5, 4],
@@ -621,21 +878,22 @@ function renderQuadrantChart(canvasId, summary) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Baseline % vs Endline % (above line = improved)", font: { size: 13 } },
+        title: { display: true, text: "Baseline vs Endline, number of farmers (above line = improved)", font: { size: 13 } },
         legend: { display: false },
         tooltip: {
           callbacks: {
             label: (ctx) => {
               const d = ctx.raw;
               if (!d.label) return "";
-              return `${d.label}: ${d.x.toFixed(1)}% -> ${d.y.toFixed(1)}%`;
+              const diff = d.y - d.x;
+              return `${d.label}: ${d.x} -> ${d.y} farmers (n=${d.n})  |  Change: ${diff >= 0 ? "+" : ""}${diff} (${d.change >= 0 ? "+" : ""}${d.change.toFixed(1)}pp)`;
             },
           },
         },
       },
       scales: {
-        x: { min: 0, max: 100, title: { display: true, text: "Baseline %" } },
-        y: { min: 0, max: 100, title: { display: true, text: "Endline %" } },
+        x: { min: 0, max: maxN, title: { display: true, text: "Baseline (number of farmers)" } },
+        y: { min: 0, max: maxN, title: { display: true, text: "Endline (number of farmers)" } },
       },
     },
   });
@@ -649,6 +907,8 @@ function buildPracticeDrilldownPanel(day, f, orgCountyNameFiltered, fullyFiltere
   const label = practiceRecords[0] ? practiceRecords[0].shortLabel : f.practice;
   const questionText = practiceRecords[0] ? practiceRecords[0].questionText : "";
   const reasons = reasonCounts(practiceRecords);
+  const changePP = pct(endYes, total) - pct(baseYes, total);
+  const diffCount = endYes - baseYes;
 
   const container = document.createElement("div");
 
@@ -658,9 +918,9 @@ function buildPracticeDrilldownPanel(day, f, orgCountyNameFiltered, fullyFiltere
     <h2>${label}</h2>
     <div class="panel-sub">${questionText}</div>
     <div class="kpi-row" style="margin-bottom:0;">
-      ${kpiCard("Baseline: Doing", `${pct(baseYes, total).toFixed(1)}%`, `${baseYes} of ${total} farmers`, "navy")}
-      ${kpiCard("Endline: Doing", `${pct(endYes, total).toFixed(1)}%`, `${endYes} of ${total} farmers`, "green")}
-      ${kpiCard("Change", `${(pct(endYes, total) - pct(baseYes, total)).toFixed(1)} pp`, endYes >= baseYes ? "Improved" : "Declined", endYes >= baseYes ? "green" : "rust")}
+      ${kpiCard("Baseline: Doing", baseYes, `of ${total} farmers`, "navy")}
+      ${kpiCard("Endline: Doing", endYes, `of ${total} farmers`, "green")}
+      ${kpiCard("Change", `${diffCount >= 0 ? "+" : ""}${diffCount} (${changePP >= 0 ? "+" : ""}${changePP.toFixed(1)}pp)`, endYes >= baseYes ? "Improved" : "Declined", endYes >= baseYes ? "green" : "rust")}
     </div>
   `;
   container.appendChild(summaryPanel);
@@ -897,15 +1157,20 @@ function summarizeByPracticeAndTenure(records) {
   });
   const out = [];
   byQ.forEach((v, q) => {
+    const newN = v.New.base.length;
+    const oldN = v.Old.base.length;
+    const newBaseDoing = v.New.base.reduce((a, b) => a + b, 0);
+    const newEndDoing = v.New.end.reduce((a, b) => a + b, 0);
+    const oldBaseDoing = v.Old.base.reduce((a, b) => a + b, 0);
+    const oldEndDoing = v.Old.end.reduce((a, b) => a + b, 0);
     out.push({
       question: q,
       label: v.label,
-      newBasePct: pct(v.New.base.reduce((a, b) => a + b, 0), v.New.base.length),
-      newEndPct: pct(v.New.end.reduce((a, b) => a + b, 0), v.New.end.length),
-      oldBasePct: pct(v.Old.base.reduce((a, b) => a + b, 0), v.Old.base.length),
-      oldEndPct: pct(v.Old.end.reduce((a, b) => a + b, 0), v.Old.end.length),
-      newN: v.New.base.length,
-      oldN: v.Old.base.length,
+      newN, oldN,
+      newBaseDoing, newBaseNotDoing: newN - newBaseDoing,
+      newEndDoing, newEndNotDoing: newN - newEndDoing,
+      oldBaseDoing, oldBaseNotDoing: oldN - oldBaseDoing,
+      oldEndDoing, oldEndNotDoing: oldN - oldEndDoing,
     });
   });
   out.sort((a, b) => a.label.localeCompare(b.label));
@@ -918,8 +1183,18 @@ function renderTenureComparisonChart(canvasId, summary) {
   if (!ctx) return;
 
   const labels = summary.map((s) => s.label);
-  const mk = (field, stack, color) => ({
-    label: "_", stack, backgroundColor: color, data: summary.map((s) => s[field]),
+
+  // Every dataset carries _tenure/_period/_role metadata used only by the
+  // tooltip - kept separate from `label`, which controls the legend. That
+  // way hiding a dataset from the legend (there'd otherwise be 8 entries)
+  // never hides its tooltip: baseline AND endline, doing AND not-doing all
+  // get a hover readout that names which one you're looking at.
+  const mkBar = (tenure, period, role, field, color, showInLegend, legendText) => ({
+    label: showInLegend ? legendText : `_${tenure} ${period} ${role}`,
+    stack: `${tenure}${period}`,
+    backgroundColor: color,
+    data: summary.map((s) => s[field]),
+    _tenure: tenure, _period: period, _role: role,
   });
 
   STATE.charts[canvasId] = new Chart(ctx, {
@@ -927,14 +1202,14 @@ function renderTenureComparisonChart(canvasId, summary) {
     data: {
       labels,
       datasets: [
-        { ...mk("newBasePct", "newBase", COLORS.green), label: "New: Doing" },
-        { stack: "newBase", backgroundColor: COLORS.greenSoft, data: summary.map((s) => 100 - s.newBasePct), label: "New: Not doing" },
-        { ...mk("newEndPct", "newEnd", COLORS.green), label: "_New doing 2" },
-        { stack: "newEnd", backgroundColor: COLORS.greenSoft, data: summary.map((s) => 100 - s.newEndPct), label: "_New not doing 2" },
-        { ...mk("oldBasePct", "oldBase", COLORS.ochre), label: "Old: Doing" },
-        { stack: "oldBase", backgroundColor: COLORS.ochreSoft, data: summary.map((s) => 100 - s.oldBasePct), label: "Old: Not doing" },
-        { ...mk("oldEndPct", "oldEnd", COLORS.ochre), label: "_Old doing 2" },
-        { stack: "oldEnd", backgroundColor: COLORS.ochreSoft, data: summary.map((s) => 100 - s.oldEndPct), label: "_Old not doing 2" },
+        mkBar("New", "Baseline", "doing", "newBaseDoing", COLORS.green, true, "New: Doing"),
+        mkBar("New", "Baseline", "notdoing", "newBaseNotDoing", COLORS.ochre, true, "New: Not doing"),
+        mkBar("New", "Endline", "doing", "newEndDoing", COLORS.green, false),
+        mkBar("New", "Endline", "notdoing", "newEndNotDoing", COLORS.ochre, false),
+        mkBar("Old", "Baseline", "doing", "oldBaseDoing", COLORS.navy, true, "Old: Doing"),
+        mkBar("Old", "Baseline", "notdoing", "oldBaseNotDoing", "#c1272d", true, "Old: Not doing"),
+        mkBar("Old", "Endline", "doing", "oldEndDoing", COLORS.navy, false),
+        mkBar("Old", "Endline", "notdoing", "oldEndNotDoing", "#c1272d", false),
       ],
     },
     options: {
@@ -949,14 +1224,17 @@ function renderTenureComparisonChart(canvasId, summary) {
         tooltip: {
           callbacks: {
             label: (ctx) => {
-              if (ctx.dataset.label.startsWith("_")) return null;
-              return `${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%`;
+              const ds = ctx.dataset;
+              const s = summary[ctx.dataIndex];
+              const n = ds._tenure === "New" ? s.newN : s.oldN;
+              const roleText = ds._role === "doing" ? "Doing" : "Not doing";
+              return `${ds._tenure}: ${roleText} (${ds._period}): ${ctx.raw} of ${n} farmers`;
             },
           },
         },
       },
       scales: {
-        x: { stacked: true, min: 0, max: 100, title: { display: true, text: "% of farmers" } },
+        x: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
         y: { stacked: true },
       },
     },

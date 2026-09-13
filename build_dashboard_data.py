@@ -1,28 +1,57 @@
 """
-rebuild_from_raw.py
-====================
-Rebuilds dashboard_data.js directly from Endline_Data_Pilot.xlsx (the true
-original raw data - one row per farmer per assessment round per day, plus
-an Endline_Qual. sheet for tenure), instead of from the already-cleaned
-Day_one.xlsx...Day_Five.xlsx workbooks that build_dashboard_data.py used
-before.
+build_dashboard_data.py
+========================
+Builds dashboard_data.js from TWO kinds of source file, each used for what
+it's reliably good at:
 
-Why: those cleaned workbooks turned out to already exclude farmers who
-were not found at endline (nBaselineSurveyed == nEndlineSurveyed on every
-day in the old dashboard_data.js - a dead giveaway), and used a
-Name+Organization+County farmer key which silently splits real farmers
-into two when their name is spelled two different ways across sheets. The
-raw file's Farmer_ID does not have that problem.
+  1. Endline_Data_Pilot.xlsx (the raw, not-yet-cleaned workbook) is used
+     ONLY to reconcile farmer identity and baseline/endline/not-found
+     counts. Its Farmer_ID is a reliable key (unlike Name+Organization+
+     County, which silently splits a real farmer into two when their name
+     is spelled two different ways across sheets).
 
-What this keeps from the old pipeline: question short labels, question
-text, and non-adoption reasonCategory strings are not present in the raw
-file, so they are carried over from the previous dashboard_data.js keyed
-by (day, question, normalized farmer name) - best-effort, since only a
-handful of names differ in spelling between the two sources.
+  2. Day_one.xlsx / Day_Two.xlsx / Day_Three.xlsx / Day_Four.xlsx /
+     Day_Five.xlsx (the already-cleaned, per-day analysis workbooks) are
+     used for every question-level value in the graphs: baseline/endline
+     answers and non-adoption reason categories. These went through a
+     careful farmer-by-farmer, question-by-question review (see each
+     workbook's own README sheet) that the raw file does not capture -
+     reconstructing reasonCategory via a fuzzy (day, question, name)
+     lookup against an old dashboard export, as an earlier version of this
+     script did, only recovered about 60% of rows. Reading it straight
+     from these workbooks recovers 100%.
+
+Because the cleaned Day_N workbooks don't carry Farmer_ID (only a "Farmer
+Name" column, sometimes truncated, reordered, or a combined multi-person
+entry), every row is matched back to the raw file's Farmer_ID via a tiered
+name-matching pass (see match_farmer()) so its organization/county/tenure
+come from the same canonical source as the identity counts.
+
+Three things this script deliberately guarantees, per a reconciliation
+request in this project:
+
+  - nBaselineSurveyed == nEndlineSurveyed + nNotFoundEndline, ALWAYS, for
+    every day. All three are computed from the SAME per-day baseline/
+    endline Farmer_ID sets (baseline, baseline & endline, baseline -
+    endline) - a disjoint split, not three separately-sourced numbers - so
+    they can never fail to add up.
+
+  - A farmer is only dropped from a day's charts entirely if they have NO
+    valid (baseline-and-endline-present) rows anywhere in that day's
+    cleaned workbook. If they're missing just one question, only that
+    (farmer, question) row is skipped - every other question they answered
+    at both rounds still counts.
+
+  - Farmer identity (name/organization/county/tenure) always comes from
+    the raw file's Farmer_ID, never from the cleaned workbook's own
+    Organization/County/Farmer_Membership text, so it stays consistent
+    with the KPI cards' identity/tenure filters.
 """
 
 import json
 import re
+import io
+import difflib
 import datetime as dt
 
 import numpy as np
@@ -51,7 +80,7 @@ def _years_between(d, ref=TENURE_REFERENCE_DATE):
 
 
 def classify_tenure(raw):
-    """Unchanged from build_dashboard_data.py."""
+    """Unchanged from prior versions of this script."""
     if raw is None or (isinstance(raw, float) and np.isnan(raw)):
         return None, "Unknown"
 
@@ -102,74 +131,6 @@ def classify_tenure(raw):
     return round(yrs, 2), ("Old" if yrs > TENURE_THRESHOLD_YEARS else "New")
 
 
-DAY_TITLES = {
-    1: "Day 1: Soil Health",
-    2: "Day 2: Pest Management",
-    3: "Day 3: Nutrition",
-    4: "Day 4: Livestock Production",
-    5: "Day 5: Climate Change Adaptation",
-}
-
-IDENTITY_COLS = {"Farmer_ID", "Farmer Name", "Organization", "County", "Sub.County", "Cluster",
-                  "Workshop.Round", "Workshop.Content"}
-
-
-def load_day_raw(day_num, n_questions_expected):
-    df = pd.read_excel(RAW_FILE, sheet_name=f"Day{day_num}", header=0)
-    round_col = df.columns[0]  # always the round column in every Day sheet
-    df[round_col] = df[round_col].astype(str).str.strip().str.lower()
-    df = df[df[round_col].isin(["baseline", "endline"])].copy()
-
-    for col in ["Farmer Name", "Organization", "County"]:
-        df[col] = df[col].astype(str).str.strip()
-
-    # Question columns = the leading run of columns immediately after the
-    # identity block (Assessment.Round/Workshop.Round/Workshop.Content/
-    # Farmer_ID/Farmer Name/Organization/County/Sub.County/Cluster). Day 3-5
-    # sheets also have a long tail of "diversity" item-list columns (crops,
-    # trees, livestock feeds, etc.) after the real Q1..Qn questions, which
-    # are NOT part of the practice-adoption question set, so we cut the
-    # question list to the same length the old dashboard used per day.
-    all_cols = list(df.columns)
-    id_idx = max(all_cols.index(c) for c in ["Farmer_ID", "Farmer Name", "Organization",
-                                              "County", "Sub.County", "Cluster"] if c in all_cols)
-    question_cols = all_cols[id_idx + 1: id_idx + 1 + n_questions_expected]
-    return df, round_col, question_cols
-
-
-def old_dashboard_lookup():
-    """Return (day,question)->(shortLabel, questionText) and
-    (day,question,normalized_name)->reasonCategory from the previous
-    dashboard_data.js, so labels/text/reasons carry over even though the
-    raw workbook doesn't contain them."""
-    try:
-        with open(OLD_DASHBOARD_JS) as f:
-            content = f.read()
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Could not find '{OLD_DASHBOARD_JS}' in the current folder. "
-            "This script needs your existing dashboard_data.js (the one "
-            "already sitting next to index.html) so it can carry over "
-            "question labels, question text, and non-adoption reason "
-            "strings that aren't present in the raw workbook. Run this "
-            "script from the same folder as your dashboard_data.js and "
-            "Endline_Data_Pilot.xlsx."
-        )
-    content = content.replace("const DASHBOARD_DATA = ", "", 1).rstrip().rstrip(";")
-    old = json.loads(content)
-
-    label_lookup = {}
-    reason_lookup = {}
-    for r in old["records"]:
-        key = (r["day"], r["question"])
-        if key not in label_lookup:
-            label_lookup[key] = (r["shortLabel"], r["questionText"])
-        if r.get("reasonCategory"):
-            name_key = (r["day"], r["question"], r["farmerName"].strip().lower())
-            reason_lookup[name_key] = r["reasonCategory"]
-    return label_lookup, reason_lookup
-
-
 def build_tenure_lookup():
     df = pd.read_excel(RAW_FILE, sheet_name="Endline_Qual.", header=0)
     lookup = {}
@@ -184,75 +145,322 @@ def build_tenure_lookup():
     return lookup
 
 
-def build_day(day_num, label_lookup, reason_lookup, tenure_lookup, n_questions_expected):
-    df, round_col, question_cols = load_day_raw(day_num, n_questions_expected)
-    n_questions = len(question_cols)
-    q_names = [f"Q{i+1}" for i in range(n_questions)]
+DAY_TITLES = {
+    1: "Day 1: Soil Health",
+    2: "Day 2: Pest Management",
+    3: "Day 3: Nutrition",
+    4: "Day 4: Livestock Production",
+    5: "Day 5: Climate Change Adaptation",
+}
 
-    # Canonical Name/Organization/County per Farmer_ID: first non-null seen.
-    canon = {}
+# Which cleaned workbook + sheet holds Day N's per-farmer, per-question data,
+# and which of that sheet's columns map to our common schema. Day 1's sheet
+# and column names differ slightly from Days 2-5 (an earlier "Type 1"
+# analysis vs later "Type 2" ones), and Days 3-4 lack Question_Text/County/
+# Farmer_Membership columns entirely - all handled here rather than assuming
+# one layout.
+DAY_FILES = {
+    1: "Day_one.xlsx",
+    2: "Day_Two.xlsx",
+    3: "Day_Three.xlsx",
+    4: "Day_Four.xlsx",
+    5: "Day_Five.xlsx",
+}
+DAY_SHEET = {
+    1: "Individual_Responses",
+    2: "Individual_Transitions",
+    3: "Individual_Transitions",
+    4: "Individual_Transitions",
+    5: "Individual_Transitions",
+}
+DAY_COLUMNS = {
+    1: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline_Code", "reason": "Category"},
+    2: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
+    3: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
+    4: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
+    5: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
+}
+
+# A handful of names in the cleaned workbooks refer to a combined multi-
+# person or otherwise irregular entry, where the correct individual match
+# is documented (Day 1's README) rather than inferable from the string
+# itself - splitting-and-taking-the-first-listed-name would pick the WRONG
+# person for the 5-person group entry below, so these are hardcoded rather
+# than left to the generic tiers. Keyed by the exact (lowercased, stripped)
+# name as it appears in the cleaned workbooks.
+NAME_ALIASES = {
+    "steve omollo/ zephania ojiem": "steve omollo",
+    "caroline a ochieng,biron corazon otieno,cynthia a odhiambo,yvonne odhiambo ,washington gavine ajowi": "cynthia a odhiambo",
+    "gaudencia teyia": "gaudencia nora teiye",
+}
+
+
+def norm_name(s):
+    s = str(s).strip().lower()
+    s = re.sub(r"[^a-z\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _tokens(s):
+    return norm_name(s).split()
+
+
+def _fuzzy_token_subset(day_toks, cand_toks, cutoff=0.8):
+    """True if every token in day_toks has a close counterpart (typo-level
+    edit distance) somewhere in cand_toks. Catches spelling drift like
+    'Lobert Lugazo' vs 'Robert Lungazo' or 'Hildah Aggay' vs 'Hilda Atieno
+    Aggay' that a whole-string similarity ratio misses once a name is also
+    missing a word."""
+    for dt_ in day_toks:
+        if not any(difflib.SequenceMatcher(None, dt_, ct).ratio() >= cutoff for ct in cand_toks):
+            return False
+    return True
+
+
+def _try_exact_or_subset(key, crosswalk):
+    if key in crosswalk:
+        return crosswalk[key], "exact"
+    day_toks = set(key.split())
+    if day_toks:
+        hits = [e for k, e in crosswalk.items() if day_toks.issubset(set(k.split()))]
+        if len(hits) == 1:
+            return hits[0], "subset"
+    return None, None
+
+
+def match_farmer(name, crosswalk):
+    """Match a cleaned-workbook 'Farmer Name' string to the raw file's
+    farmer identity for this day. crosswalk: normalized-name -> entry
+    (Farmer_ID/name/organization/county). Tries, in order: a documented
+    alias; an exact or token-subset match (handles a dropped middle/last
+    name); the first part of a combined "A/B" or "A,B,C" entry; a per-token
+    fuzzy match (handles spelling drift); a whole-string fuzzy match; and a
+    sorted-token fuzzy match (handles two names given in a different
+    order). Returns (entry, tier) or (None, None)."""
+    raw_key = str(name).strip().lower()
+    if raw_key in NAME_ALIASES:
+        alias_key = norm_name(NAME_ALIASES[raw_key])
+        if alias_key in crosswalk:
+            return crosswalk[alias_key], "alias"
+
+    key = norm_name(name)
+    entry, tier = _try_exact_or_subset(key, crosswalk)
+    if entry:
+        return entry, tier
+
+    for sep in ["/", ","]:
+        if sep in str(name):
+            first_part = str(name).split(sep)[0].strip()
+            entry, tier = _try_exact_or_subset(norm_name(first_part), crosswalk)
+            if entry:
+                return entry, "split"
+
+    day_toks = _tokens(name)
+    if day_toks:
+        hits = [e for k, e in crosswalk.items() if _fuzzy_token_subset(day_toks, k.split())]
+        if len(hits) == 1:
+            return hits[0], "fuzzy-token"
+
+    cand = difflib.get_close_matches(key, crosswalk.keys(), n=1, cutoff=0.82)
+    if cand:
+        return crosswalk[cand[0]], "fuzzy"
+
+    skey = " ".join(sorted(day_toks))
+    sorted_index = {}
+    for k, e in crosswalk.items():
+        sorted_index.setdefault(" ".join(sorted(k.split())), []).append(e)
+    cand2 = difflib.get_close_matches(skey, sorted_index.keys(), n=1, cutoff=0.82)
+    if cand2 and len(sorted_index[cand2[0]]) == 1:
+        return sorted_index[cand2[0]][0], "sorted-fuzzy"
+
+    return None, None
+
+
+def to_binary(val):
+    """0/1 if val cleanly encodes a yes/no response, else None (missing -
+    covers real NaN as well as the sentinel strings each day's cleaned
+    workbook uses for a gap: 'Null' in Day 1, 'N/A1' in Day 5, etc.)."""
+    if val is None:
+        return None
+    if isinstance(val, float) and np.isnan(val):
+        return None
+    if isinstance(val, (int, float)):
+        if val == 0:
+            return 0
+        if val == 1:
+            return 1
+        return None
+    s = str(val).strip().lower()
+    if s in ("0", "0.0"):
+        return 0
+    if s in ("1", "1.0"):
+        return 1
+    return None
+
+
+def find_header_row(path, sheet, marker="Question", scan_rows=8):
+    raw = pd.read_excel(path, sheet_name=sheet, header=None, nrows=scan_rows)
+    for i in range(len(raw)):
+        if raw.iloc[i].astype(str).str.strip().eq(marker).any():
+            return i
+    raise ValueError(f"Could not find a header row containing '{marker}' in {path}::{sheet}")
+
+
+def build_day_crosswalk(day_num):
+    """norm_name -> {Farmer_ID, name, organization, county} for this day,
+    plus the day's TRUE baseline/endline Farmer_ID sets, straight from the
+    raw workbook. This is the single source of truth for identity and for
+    the baseline/endline/not-found KPI counts."""
+    df = pd.read_excel(RAW_FILE, sheet_name=f"Day{day_num}", header=0)
+    round_col = df.columns[0]
+    df[round_col] = df[round_col].astype(str).str.strip().str.lower()
+    df = df[df[round_col].isin(["baseline", "endline"])].copy()
+    for col in ["Farmer Name", "Organization", "County"]:
+        df[col] = df[col].astype(str).str.strip()
+    df["Farmer_ID"] = pd.to_numeric(df["Farmer_ID"], errors="coerce")
+
+    crosswalk = {}
     for fid, group in df.groupby("Farmer_ID"):
-        canon[fid] = {
-            "name": group["Farmer Name"].iloc[0],
-            "org": group["Organization"].iloc[0],
+        name = group["Farmer Name"].iloc[0]
+        crosswalk[norm_name(name)] = {
+            "Farmer_ID": fid,
+            "name": name,
+            "organization": group["Organization"].iloc[0],
             "county": group["County"].iloc[0],
         }
 
     baseline_ids = set(df.loc[df[round_col] == "baseline", "Farmer_ID"].dropna())
     endline_ids = set(df.loc[df[round_col] == "endline", "Farmer_ID"].dropna())
-    n_baseline_surveyed = len(baseline_ids)
-    n_endline_surveyed = len(endline_ids)
-    n_not_found_endline = len(baseline_ids - endline_ids)
+    return crosswalk, baseline_ids, endline_ids
 
-    # Wide -> long: one row per (Farmer_ID, round, question)
-    melted = df.melt(
-        id_vars=["Farmer_ID", round_col],
-        value_vars=question_cols,
-        var_name="raw_question_col",
-        value_name="value",
-    )
-    col_to_q = dict(zip(question_cols, q_names))
-    melted["Question"] = melted["raw_question_col"].map(col_to_q)
-    melted["value"] = pd.to_numeric(melted["value"], errors="coerce")
 
-    pivot = melted.pivot_table(
-        index=["Farmer_ID", "Question"], columns=round_col, values="value", aggfunc="first"
-    ).reset_index()
-    if "baseline" not in pivot.columns:
-        pivot["baseline"] = np.nan
-    if "endline" not in pivot.columns:
-        pivot["endline"] = np.nan
+def old_dashboard_lookup():
+    """Return (day,question)->(shortLabel, questionText) from the previous
+    dashboard_data.js, so question labels/text carry over even though the
+    cleaned workbooks don't all include a Question_Text column. (Unlike an
+    earlier version of this script, reasonCategory is NOT sourced this way
+    any more - it now comes directly from each day's own cleaned workbook,
+    which is far more complete.)"""
+    try:
+        with open(OLD_DASHBOARD_JS) as f:
+            content = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Could not find '{OLD_DASHBOARD_JS}' in the current folder. "
+            "This script needs your existing dashboard_data.js (the one "
+            "already sitting next to index.html) so it can carry over "
+            "question labels and question text. Run this script from the "
+            "same folder as your dashboard_data.js, Endline_Data_Pilot.xlsx "
+            "and the five Day_*.xlsx workbooks."
+        )
+    content = content.replace("const DASHBOARD_DATA = ", "", 1).rstrip().rstrip(";")
+    old = json.loads(content)
 
-    # A farmer is "matched" for this day only if EVERY question has both
-    # Baseline and Endline present (same complete-case rule as before).
-    missing_either = pivot.loc[
-        pivot["baseline"].isna() | pivot["endline"].isna(), "Farmer_ID"
-    ].unique()
-    matched_ids = baseline_ids & endline_ids - set(missing_either)
-    n_matched = len(matched_ids)
+    label_lookup = {}
+    for r in old["records"]:
+        key = (r["day"], r["question"])
+        if key not in label_lookup:
+            label_lookup[key] = (r["shortLabel"], r["questionText"])
+    return label_lookup
 
-    clean = pivot[pivot["Farmer_ID"].isin(matched_ids)].copy()
 
+def build_day(day_num, label_lookup, tenure_lookup):
+    crosswalk, baseline_ids, endline_ids = build_day_crosswalk(day_num)
+    canon = {entry["Farmer_ID"]: entry for entry in crosswalk.values()}
+
+    path = DAY_FILES[day_num]
+    sheet = DAY_SHEET[day_num]
+    hdr = find_header_row(path, sheet)
+    df = pd.read_excel(path, sheet_name=sheet, header=hdr)
+    df.columns = [str(c).strip() for c in df.columns]
+    cols = DAY_COLUMNS[day_num]
+
+    match_tiers = {}
+    unmatched_names = set()
+    matched_fids = set()
     records = []
-    for _, r in clean.iterrows():
-        fid = r["Farmer_ID"]
-        q = r["Question"]
-        name = canon[fid]["name"]
+
+    for _, row in df.iterrows():
+        q = row.get(cols["question"])
+        if pd.isna(q) or str(q).strip() == "":
+            continue
+        q = str(q).strip()
+
+        name_raw = row.get(cols["farmer"])
+        if pd.isna(name_raw) or str(name_raw).strip() == "":
+            continue
+
+        # Concern: a farmer should only be dropped from a day's charts
+        # entirely if EVERY question is missing for them. Here we simply
+        # skip THIS (farmer, question) row when either round is missing -
+        # every other question row for the same farmer is untouched.
+        base = to_binary(row.get(cols["baseline"]))
+        end = to_binary(row.get(cols["endline"]))
+        if base is None or end is None:
+            continue
+
+        entry, tier = match_farmer(name_raw, crosswalk)
+        if entry is None:
+            unmatched_names.add(str(name_raw).strip())
+            continue
+        match_tiers[tier] = match_tiers.get(tier, 0) + 1
+
+        fid = entry["Farmer_ID"]
+        matched_fids.add(fid)
+
+        reason_val = row.get(cols["reason"])
+        reason = None
+        if end == 0 and reason_val is not None and not (isinstance(reason_val, float) and np.isnan(reason_val)):
+            reason_str = str(reason_val).strip()
+            if reason_str and reason_str.lower() not in ("nan", "none"):
+                reason = reason_str
+
         short_label, question_text = label_lookup.get((day_num, q), (q, q))
-        reason = reason_lookup.get((day_num, q, name.strip().lower()))
         records.append({
             "day": day_num,
             "question": q,
             "shortLabel": short_label,
             "questionText": question_text,
-            "farmerName": name,
-            "organization": canon[fid]["org"],
-            "county": canon[fid]["county"],
+            "farmerName": entry["name"],
+            "organization": entry["organization"],
+            "county": entry["county"],
             "tenure": tenure_lookup.get(fid, "Unknown"),
-            "baseline": int(r["baseline"]),
-            "endline": int(r["endline"]),
-            "reasonCategory": reason if r["endline"] == 0 else None,
+            "baseline": base,
+            "endline": end,
+            "reasonCategory": reason,
         })
+
+    if unmatched_names:
+        print(f"  Day {day_num}: {len(unmatched_names)} farmer name(s) in {DAY_FILES[day_num]} "
+              f"could not be matched to the raw file's Day {day_num} farmer list "
+              f"(dropped from this day's charts only - identity/KPI counts are "
+              f"unaffected): {sorted(unmatched_names)}")
+
+    # These three are computed from the SAME disjoint split of baseline_ids,
+    # so nBaselineSurveyed == nEndlineSurveyed + nNotFoundEndline always.
+    n_baseline_surveyed = len(baseline_ids)
+    n_endline_surveyed = len(baseline_ids & endline_ids)
+    n_not_found_endline = len(baseline_ids - endline_ids)
+    n_matched = len(matched_fids)
+
+    all_fids_this_day = baseline_ids | endline_ids
+    farmers = []
+    for fid in all_fids_this_day:
+        c = canon.get(fid)
+        if c is None:
+            continue
+        farmers.append({
+            "farmerId": int(fid),
+            "farmerName": c["name"],
+            "organization": c["organization"],
+            "county": c["county"],
+            "tenure": tenure_lookup.get(fid, "Unknown"),
+            "atBaseline": fid in baseline_ids,
+            "atEndlineThisDay": fid in endline_ids,
+            "foundAtEndlineAnyDay": None,  # filled in once every day is processed
+            "matched": fid in matched_fids,
+        })
+    farmers.sort(key=lambda x: x["farmerName"].lower())
 
     meta = {
         "day": day_num, "title": DAY_TITLES[day_num],
@@ -260,13 +468,17 @@ def build_day(day_num, label_lookup, reason_lookup, tenure_lookup, n_questions_e
         "nEndlineSurveyed": n_endline_surveyed,
         "nNotFoundEndline": n_not_found_endline,
         "nMatched": n_matched,
-        "questions": q_names,
+        "questions": sorted({r["question"] for r in records}, key=lambda x: int(re.sub(r"\D", "", x) or 0)),
+        "farmers": farmers,
     }
+    print(f"Day {day_num}: baseline={n_baseline_surveyed} endline={n_endline_surveyed} "
+          f"not-found={n_not_found_endline} matched={n_matched} rows={len(records)} "
+          f"(name match tiers: {match_tiers})")
     return records, meta, baseline_ids, endline_ids
 
 
 if __name__ == "__main__":
-    label_lookup, reason_lookup = old_dashboard_lookup()
+    label_lookup = old_dashboard_lookup()
     tenure_lookup = build_tenure_lookup()
 
     all_records = []
@@ -274,23 +486,18 @@ if __name__ == "__main__":
     global_baseline_ids = set()
     global_endline_ids = set()
 
-    n_questions_by_day = {}
-    for (day_num, q) in label_lookup:
-        n_questions_by_day[day_num] = max(n_questions_by_day.get(day_num, 0), int(q[1:]))
-
     for day_num in [1, 2, 3, 4, 5]:
-        records, meta, baseline_ids, endline_ids = build_day(
-            day_num, label_lookup, reason_lookup, tenure_lookup,
-            n_questions_by_day[day_num]
-        )
+        records, meta, baseline_ids, endline_ids = build_day(day_num, label_lookup, tenure_lookup)
         all_records.extend(records)
         day_meta.append(meta)
         global_baseline_ids |= baseline_ids
         global_endline_ids |= endline_ids
-        print(f"Day {day_num}: baseline={meta['nBaselineSurveyed']} "
-              f"endline={meta['nEndlineSurveyed']} "
-              f"not-found-at-endline={meta['nNotFoundEndline']} "
-              f"matched={meta['nMatched']} rows={len(records)}")
+
+    # foundAtEndlineAnyDay needs the GLOBAL endline set (found on ANY day),
+    # which is only known once every day has been processed.
+    for meta in day_meta:
+        for farmer in meta["farmers"]:
+            farmer["foundAtEndlineAnyDay"] = farmer["farmerId"] in global_endline_ids
 
     n_unique_farmers_total = len(global_baseline_ids)
     n_unique_found_endline_any = len(global_baseline_ids & global_endline_ids)
@@ -302,13 +509,12 @@ if __name__ == "__main__":
           f"{n_unique_not_found_endline_any} never found at endline in any day "
           f"they took part in.")
 
-    reasons_carried = sum(1 for r in all_records if r["reasonCategory"])
-    reasons_total_zero_endline = sum(1 for r in all_records if r["endline"] == 0)
-    print(f"Reason categories carried over: {reasons_carried} of "
-          f"{reasons_total_zero_endline} endline=0 rows "
-          f"({reasons_carried/max(reasons_total_zero_endline,1)*100:.1f}%) "
-          f"- the rest have no reasonCategory because the farmer name didn't "
-          f"exactly match between the raw file and the old cleaned data.")
+    # Sanity check for the "baseline == endline + not-found" guarantee -
+    # this should never print anything, but fail loudly if it ever would.
+    for meta in day_meta:
+        if meta["nBaselineSurveyed"] != meta["nEndlineSurveyed"] + meta["nNotFoundEndline"]:
+            raise AssertionError(f"Day {meta['day']}: baseline/endline/not-found do not add up - "
+                                  f"{meta['nBaselineSurveyed']} != {meta['nEndlineSurveyed']} + {meta['nNotFoundEndline']}")
 
     payload = {
         "generatedNote": f"Data source: {DATA_SOURCE}",
