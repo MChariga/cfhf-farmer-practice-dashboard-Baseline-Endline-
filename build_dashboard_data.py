@@ -133,6 +133,7 @@ def classify_tenure(raw):
 
 def build_tenure_lookup():
     df = pd.read_excel(RAW_FILE, sheet_name="Endline_Qual.", header=0)
+    df["Farmer_ID"] = _merge_farmer_ids(df["Farmer_ID"])
     lookup = {}
     for fid, group in df.groupby("Farmer_ID"):
         raw_val = None
@@ -190,9 +191,44 @@ DAY_COLUMNS = {
 # name as it appears in the cleaned workbooks.
 NAME_ALIASES = {
     "steve omollo/ zephania ojiem": "steve omollo",
-    "caroline a ochieng,biron corazon otieno,cynthia a odhiambo,yvonne odhiambo ,washington gavine ajowi": "cynthia a odhiambo",
     "gaudencia teyia": "gaudencia nora teiye",
+    # NOTE: the 5-person combined group entry ("Caroline A Ochieng,Biron
+    # Corazon Otieno,Cynthia A Odhiambo,Yvonne Odhiambo ,Washington Gavine
+    # Ajowi") is deliberately NOT aliased to Cynthia here. Day 1's README
+    # says to use it for her BASELINE record, but the same row also carries
+    # an Endline value, and Cynthia's own raw-file identity was never
+    # marked found-at-endline. Attributing the row to her pulled that
+    # unverified endline value in too, making her "matched" in charts when
+    # she should be missing. Leaving this name unmatched means the row is
+    # skipped entirely, which is what we want.
 }
+
+# The raw pilot file recorded the SAME real person under two different
+# Farmer_IDs in Day 5 - one used only for her baseline round, a different
+# one used only for her endline round (a genuine raw data-entry
+# inconsistency, not a name-matching artifact: the cleaned Day_Five.xlsx
+# workbook already treats her as one continuous farmer, "Jackline Adeng'
+# Akinyi"). Merge the baseline-only ID into the endline-only one so every
+# lookup (identity, baseline/endline sets, tenure) treats them as one
+# farmer. Old ID -> canonical ID kept.
+FARMER_ID_MERGES = {
+    45555: 80216,  # "Jackline Akinyi" (baseline only) -> "Jackline Ondeg" (endline only)
+}
+# Canonical display name for a merged identity, keyed by the ID kept above.
+FARMER_ID_MERGE_NAMES = {
+    80216: "Jackline Ondeg",
+}
+
+
+def _merge_farmer_ids(series):
+    """Coerce to numeric and fold any merged (duplicate-identity) Farmer_IDs
+    into their canonical ID, regardless of int/float dtype quirks."""
+    s = pd.to_numeric(series, errors="coerce")
+    merge_map = {}
+    for old, new in FARMER_ID_MERGES.items():
+        merge_map[old] = new
+        merge_map[float(old)] = float(new)
+    return s.replace(merge_map)
 
 
 def norm_name(s):
@@ -317,17 +353,24 @@ def build_day_crosswalk(day_num):
     df = df[df[round_col].isin(["baseline", "endline"])].copy()
     for col in ["Farmer Name", "Organization", "County"]:
         df[col] = df[col].astype(str).str.strip()
-    df["Farmer_ID"] = pd.to_numeric(df["Farmer_ID"], errors="coerce")
+    df["Farmer_ID"] = _merge_farmer_ids(df["Farmer_ID"])
 
     crosswalk = {}
     for fid, group in df.groupby("Farmer_ID"):
-        name = group["Farmer Name"].iloc[0]
-        crosswalk[norm_name(name)] = {
+        name = FARMER_ID_MERGE_NAMES.get(fid, group["Farmer Name"].iloc[0])
+        entry = {
             "Farmer_ID": fid,
             "name": name,
             "organization": group["Organization"].iloc[0],
             "county": group["County"].iloc[0],
         }
+        crosswalk[norm_name(name)] = entry
+        # Also index every OTHER spelling this farmer appears under in the
+        # raw file (relevant for merged identities, which by definition
+        # have at least two) so a cleaned-workbook row using either name
+        # still resolves to the same merged entry.
+        for alt in group["Farmer Name"].unique():
+            crosswalk.setdefault(norm_name(alt), entry)
 
     baseline_ids = set(df.loc[df[round_col] == "baseline", "Farmer_ID"].dropna())
     endline_ids = set(df.loc[df[round_col] == "endline", "Farmer_ID"].dropna())
