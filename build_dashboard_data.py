@@ -192,15 +192,21 @@ DAY_COLUMNS = {
 NAME_ALIASES = {
     "steve omollo/ zephania ojiem": "steve omollo",
     "gaudencia teyia": "gaudencia nora teiye",
-    # NOTE: the 5-person combined group entry ("Caroline A Ochieng,Biron
-    # Corazon Otieno,Cynthia A Odhiambo,Yvonne Odhiambo ,Washington Gavine
-    # Ajowi") is deliberately NOT aliased to Cynthia here. Day 1's README
-    # says to use it for her BASELINE record, but the same row also carries
-    # an Endline value, and Cynthia's own raw-file identity was never
-    # marked found-at-endline. Attributing the row to her pulled that
-    # unverified endline value in too, making her "matched" in charts when
-    # she should be missing. Leaving this name unmatched means the row is
-    # skipped entirely, which is what we want.
+}
+
+# Names that must NEVER be attributed to anyone - not via alias, and not via
+# any of match_farmer()'s generic tiers either. The 5-person combined group
+# entry below is exactly this case: Day 1's README says to use it for
+# Cynthia's BASELINE record, but it also carries an Endline value that isn't
+# verified as hers (see NAME_ALIASES history), so we stopped aliasing it to
+# her - but doing only that let the generic "split on comma, try the first
+# name" tier catch it instead and misattribute the whole row to "Caroline A
+# Ochieng" (the first name listed), creating duplicate/contradictory rows
+# for her. Excluding it here means the row is dropped entirely, for
+# everyone, on every day it appears - the correct behavior for data that
+# can't be confidently attributed to one individual.
+EXCLUDED_NAMES = {
+    "caroline a ochieng,biron corazon otieno,cynthia a odhiambo,yvonne odhiambo ,washington gavine ajowi",
 }
 
 # The raw pilot file recorded the SAME real person under two different
@@ -274,6 +280,8 @@ def match_farmer(name, crosswalk):
     sorted-token fuzzy match (handles two names given in a different
     order). Returns (entry, tier) or (None, None)."""
     raw_key = str(name).strip().lower()
+    if raw_key in EXCLUDED_NAMES:
+        return None, None
     if raw_key in NAME_ALIASES:
         alias_key = norm_name(NAME_ALIASES[raw_key])
         if alias_key in crosswalk:
@@ -551,6 +559,27 @@ if __name__ == "__main__":
           f"{n_unique_found_endline_any} found at endline in at least one day, "
           f"{n_unique_not_found_endline_any} never found at endline in any day "
           f"they took part in.")
+
+    # --- Overview-page per-day summary override -----------------------------
+    # The Overview tab's per-day summary and "Matched Sample Size by Day"
+    # chart read nBaselineSurveyed/nEndlineSurveyed straight from each day's
+    # meta object. Left alone, nEndlineSurveyed is a day-specific count
+    # (baseline attendees also endline-found THAT day), which varies day to
+    # day by a farmer or two even when the underlying data has no real gaps.
+    # Per project decision, the Overview page instead shows "Farmers at
+    # Endline" as the single GLOBAL found-at-endline total for every day
+    # (141 as of this dataset) - since endline was one comprehensive visit,
+    # not a day-specific one - with nBaselineSurveyed DERIVED from it
+    # (global endline + that day's real not-found count) rather than
+    # hardcoded, so the baseline/endline/not-found identity always holds
+    # automatically and never needs manual re-editing again, even as
+    # upstream fixes (like the Cynthia/Jackline correction) shift the true
+    # not-found counts. This override affects ONLY the Overview page - the
+    # per-day tab KPI cards and every chart still read the real, farmer-
+    # level, per-day data untouched.
+    for meta in day_meta:
+        meta["nEndlineSurveyed"] = n_unique_found_endline_any
+        meta["nBaselineSurveyed"] = n_unique_found_endline_any + meta["nNotFoundEndline"]
 
     # Sanity check for the "baseline == endline + not-found" guarantee -
     # this should never print anything, but fail loudly if it ever would.
