@@ -12,6 +12,7 @@ const STATE = {
   sort: {},    // keyed by day number -> {col, dir}
   charts: {},  // keyed by canvas id -> Chart.js instance, so we can destroy before redraw
   selectedReason: {}, // keyed by day number -> the reasonCategory currently drilled into on the treemap, or null
+  namesUnlocked: false, // whether farmer names are shown in the clear or blurred; resets on page reload
 };
 
 const COLORS = {
@@ -178,10 +179,45 @@ function downloadCSV(rows, columns, filename) {
   URL.revokeObjectURL(url);
 }
 
-// Same access password as the Overview tab's "Download Data" panel. Used for
-// the two exports that carry farmer names (Farmers Not Found at Endline, and
-// the Reasons-for-Non-Adoption drill-down) - clicking Export prompts for the
-// password before the CSV is generated; a blank/incorrect entry cancels.
+// Same access password as the CSV exports and the Overview tab's bulk
+// downloads. Wrap a farmer name with this wherever a table renders one -
+// it prints blurred until the person unlocks names for this session (the
+// header control at the top right of the page).
+function farmerNameCell(name) {
+  return `<span class="${STATE.namesUnlocked ? "" : "name-blurred"}">${name}</span>`;
+}
+
+function renderNameLockControl() {
+  const el = document.getElementById("nameLockControl");
+  if (!el) return;
+  el.innerHTML = STATE.namesUnlocked
+    ? `<span>&#128275; Farmer names visible</span><button class="btn" id="lock-names-btn">Hide names</button>`
+    : `<span>&#128274; Farmer names hidden</span><button class="btn" id="unlock-names-btn">Unlock</button>`;
+
+  if (STATE.namesUnlocked) {
+    el.querySelector("#lock-names-btn").addEventListener("click", () => {
+      STATE.namesUnlocked = false;
+      renderNameLockControl();
+      renderMain();
+    });
+  } else {
+    el.querySelector("#unlock-names-btn").addEventListener("click", () => {
+      const entered = window.prompt("Enter the access password to view farmer names:");
+      if (entered === null) return;
+      if (entered !== DOWNLOAD_PASSWORD) {
+        alert("Incorrect password.");
+        return;
+      }
+      STATE.namesUnlocked = true;
+      renderNameLockControl();
+      renderMain();
+    });
+  }
+}
+
+// Same access password as the CSV exports above. Clicking Export prompts
+// for the password before the CSV is generated; a blank/incorrect entry
+// cancels.
 function passwordGatedDownload(rows, columns, filename) {
   const entered = window.prompt("Enter the access password to export this farmer list:");
   if (entered === null) return;
@@ -782,7 +818,7 @@ function buildNotFoundPanel(day, notFoundFarmers) {
           <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th><th>Reason not assessed</th></tr></thead>
           <tbody>
             ${sorted.map((p) => `
-              <tr><td>${p.farmerName}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td><td>${p.reasonNotAssessed || "-"}</td></tr>
+              <tr><td>${farmerNameCell(p.farmerName)}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td><td>${p.reasonNotAssessed || "-"}</td></tr>
             `).join("")}
           </tbody>
         </table>
@@ -1043,7 +1079,7 @@ function buildFarmerTable(day, records, f) {
           <tbody>
             ${sorted.map((r) => `
               <tr>
-                <td>${r.farmerName}</td>
+                <td>${farmerNameCell(r.farmerName)}</td>
                 <td>${r.organization}</td>
                 <td>${r.county}</td>
                 <td><span class="status-pill ${r.baseline === 1 ? "status-yes" : "status-no"}">${r.baseline === 1 ? "Doing" : "Not doing"}</span></td>
@@ -1496,7 +1532,7 @@ function renderReasonDrilldown(containerId, nonAdoptionRecords, selectedReason, 
           <table class="data-table">
             <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th><th>Practice</th></tr></thead>
             <tbody>
-              ${rows.map((r) => `<tr><td>${r.farmerName}</td><td>${r.organization}</td><td>${r.county}</td><td>${r.tenure}</td><td>${r.shortLabel}</td></tr>`).join("")}
+              ${rows.map((r) => `<tr><td>${farmerNameCell(r.farmerName)}</td><td>${r.organization}</td><td>${r.county}</td><td>${r.tenure}</td><td>${r.shortLabel}</td></tr>`).join("")}
             </tbody>
           </table>
         </div>
@@ -1544,6 +1580,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function init() {
   document.getElementById("generatedDate").textContent = "Generated " + new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
   document.getElementById("dataSourceNote").textContent = DASHBOARD_DATA.generatedNote || "";
+  renderNameLockControl();
   renderTabs();
   renderMain();
 }
