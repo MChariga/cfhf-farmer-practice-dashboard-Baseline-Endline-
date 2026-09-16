@@ -11,6 +11,7 @@ const STATE = {
   filters: {}, // keyed by day number -> {organization, county, farmerSearch, practice, baselineStatus, endlineStatus}
   sort: {},    // keyed by day number -> {col, dir}
   charts: {},  // keyed by canvas id -> Chart.js instance, so we can destroy before redraw
+  selectedReason: {}, // keyed by day number -> the reasonCategory currently drilled into on the treemap, or null
 };
 
 const COLORS = {
@@ -142,12 +143,20 @@ function summarizeByPractice(records) {
   return out;
 }
 
+// Box size = unique farmers who gave that reason for not doing at least one
+// practice - a farmer citing the same reason across several practices only
+// counts once, so a single reason's count can never exceed the number of
+// farmers. (A farmer who gives *different* reasons for different practices
+// can still show up in more than one reason's count - see the panel note.)
 function reasonCounts(records) {
   const notDoing = records.filter((r) => r.endline === 0 && r.reasonCategory);
-  const counts = new Map();
-  notDoing.forEach((r) => counts.set(r.reasonCategory, (counts.get(r.reasonCategory) || 0) + 1));
-  return Array.from(counts.entries())
-    .map(([reason, n]) => ({ reason, n }))
+  const farmersByReason = new Map();
+  notDoing.forEach((r) => {
+    if (!farmersByReason.has(r.reasonCategory)) farmersByReason.set(r.reasonCategory, new Set());
+    farmersByReason.get(r.reasonCategory).add(farmerKey(r));
+  });
+  return Array.from(farmersByReason.entries())
+    .map(([reason, farmerSet]) => ({ reason, n: farmerSet.size }))
     .sort((a, b) => b.n - a.n);
 }
 
@@ -167,6 +176,20 @@ function downloadCSV(rows, columns, filename) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Same access password as the Overview tab's "Download Data" panel. Used for
+// the two exports that carry farmer names (Farmers Not Found at Endline, and
+// the Reasons-for-Non-Adoption drill-down) - clicking Export prompts for the
+// password before the CSV is generated; a blank/incorrect entry cancels.
+function passwordGatedDownload(rows, columns, filename) {
+  const entered = window.prompt("Enter the access password to export this farmer list:");
+  if (entered === null) return;
+  if (entered !== DOWNLOAD_PASSWORD) {
+    alert("Incorrect password. Export cancelled.");
+    return;
+  }
+  downloadCSV(rows, columns, filename);
 }
 
 function downloadJSON(obj, filename) {
@@ -737,7 +760,7 @@ function buildDayView(day) {
 
   // --- Advanced views: live alluvial + treemap (respect filters above) and
   // the New-vs-Old tenure comparison (ignores the Tenure dropdown itself) ---
-  wrap.appendChild(buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f));
+  wrap.appendChild(buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nEndlineFiltered));
 
   return wrap;
 }
@@ -752,14 +775,14 @@ function buildNotFoundPanel(day, notFoundFarmers) {
   const sorted = [...notFoundFarmers].sort((a, b) => a.farmerName.localeCompare(b.farmerName));
   panel.innerHTML = `
     <h2>Farmers Not Found at Endline</h2>
-    <div class="panel-sub">Surveyed at baseline but not reached at endline for this day. Reflects the organization/county/name/tenure filters above.</div>
+    <div class="panel-sub">Surveyed at baseline but not reached at endline for this day. Reflects the organization/county/name/tenure filters above. Reason not assessed comes from the MissingFarmers tracking sheet; a handful of farmers have no reason recorded there.</div>
     ${sorted.length ? `
       <div class="table-scroll">
         <table class="data-table">
-          <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th></tr></thead>
+          <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th><th>Reason not assessed</th></tr></thead>
           <tbody>
             ${sorted.map((p) => `
-              <tr><td>${p.farmerName}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td></tr>
+              <tr><td>${p.farmerName}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td><td>${p.reasonNotAssessed || "-"}</td></tr>
             `).join("")}
           </tbody>
         </table>
@@ -772,11 +795,12 @@ function buildNotFoundPanel(day, notFoundFarmers) {
   `;
   if (sorted.length) {
     panel.querySelector(`#export-notfound-${day}`).addEventListener("click", () => {
-      downloadCSV(sorted, [
+      passwordGatedDownload(sorted, [
         { label: "Farmer", get: (p) => p.farmerName },
         { label: "Organization", get: (p) => p.organization },
         { label: "County", get: (p) => p.county },
         { label: "Tenure", get: (p) => p.tenure },
+        { label: "Reason not assessed", get: (p) => p.reasonNotAssessed || "" },
       ], `day${day}_not_found_at_endline.csv`);
     });
   }
@@ -803,12 +827,19 @@ function buildAllPracticesPanel(day, records) {
   return panel;
 }
 
+// Adds a minimal, always-present margin above the highest data value so a
+// bar/dot at the max never sits flush against the plot edge, without
+// inflating the scale into "nice round number" territory (e.g. 115 -> 116).
+function axisMaxWithMargin(maxVal) {
+  return Math.ceil(maxVal) + 1;
+}
+
 function renderDumbbellChart(canvasId, summary) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   const sorted = [...summary].sort((a, b) => a.change - b.change);
-  const maxN = Math.max(1, ...sorted.map((s) => Math.max(s.baseCount, s.endCount)));
+  const maxN = axisMaxWithMargin(Math.max(1, ...sorted.map((s) => Math.max(s.baseCount, s.endCount))));
   STATE.charts[canvasId] = new Chart(ctx, {
     type: "bar",
     data: {
@@ -851,7 +882,7 @@ function renderQuadrantChart(canvasId, summary) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
-  const maxN = Math.max(1, ...summary.map((s) => Math.max(s.baseCount, s.endCount)));
+  const maxN = axisMaxWithMargin(Math.max(1, ...summary.map((s) => Math.max(s.baseCount, s.endCount))));
   STATE.charts[canvasId] = new Chart(ctx, {
     type: "scatter",
     data: {
@@ -1056,9 +1087,9 @@ function buildFarmerTable(day, records, f) {
 }
 
 // ---------------------------------------------------------------------------
-// Advanced views: live alluvial + treemap (both respect the filters above)
-// and the New-vs-Old tenure comparison (replaces the old "featured practice"
-// alluvial; always shows both tenure groups regardless of the Tenure filter)
+// Advanced views: live alluvial (featured practice when "All" is selected)
+// + treemap (both respect the filters above), and the New-vs-Old tenure
+// comparison (always shows both tenure groups regardless of the Tenure filter)
 // ---------------------------------------------------------------------------
 function computeTransitionsJS(records) {
   let stayedNotDoing = 0, stopped = 0, started = 0, stayedDoing = 0;
@@ -1071,52 +1102,42 @@ function computeTransitionsJS(records) {
   return { stayedNotDoing, stopped, started, stayedDoing };
 }
 
-// When "All Practices" is selected, coreFiltered has one row per
-// farmer-per-question, so feeding it straight into computeTransitionsJS
-// would count the same farmer once per practice (e.g. 14x on Day 1). This
-// collapses to one row per farmer: baseline/endline = 1 if that farmer was
-// doing ANY practice at that round, 0 if they were doing none.
-function collapseToFarmerLevel(records) {
-  const byFarmer = new Map();
-  records.forEach((r) => {
-    const key = farmerKey(r);
-    if (!byFarmer.has(key)) byFarmer.set(key, { baseline: 0, endline: 0 });
-    const bucket = byFarmer.get(key);
-    if (r.baseline === 1) bucket.baseline = 1;
-    if (r.endline === 1) bucket.endline = 1;
-  });
-  return Array.from(byFarmer.values());
-}
-
-function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f) {
+function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nEndlineFiltered) {
   const container = document.createElement("div");
 
   // --- Live alluvial: one row per farmer. For a single practice, each
-  // farmer already has exactly one row. For "All Practices" combined, each
-  // farmer is collapsed first so they're counted once (not once per
-  // practice), per the "adopted at least one practice" definition. ---
+  // farmer already has exactly one row. For "All Practices", rather than
+  // collapsing every practice into one "doing at least one" row, we feature
+  // the single practice with the largest baseline-to-endline change - the
+  // same ranking summarizeByPractice already uses for the dumbbell/quadrant
+  // charts above, so the "featured" pick is consistent across the page. ---
+  const featuredPractice = f.practice === "All" ? summarizeByPractice(coreFiltered)[0] : null;
   const alluvialSource = f.practice === "All"
-    ? collapseToFarmerLevel(coreFiltered)
+    ? (featuredPractice ? coreFiltered.filter((r) => r.question === featuredPractice.question) : [])
     : coreFiltered.filter((r) => r.question === f.practice);
   const alluvialPanel = document.createElement("div");
   alluvialPanel.className = "panel";
-  const alluvialTitle = f.practice === "All" ? "all practices combined" : (coreFiltered.find((r) => r.question === f.practice) || {}).shortLabel || f.practice;
+  const alluvialTitle = f.practice === "All"
+    ? (featuredPractice ? `Featured practice - ${featuredPractice.label}` : "no practices in range")
+    : (coreFiltered.find((r) => r.question === f.practice) || {}).shortLabel || f.practice;
   const alluvialNote = f.practice === "All"
-    ? "Each farmer is counted once here: \u201cDoing\u201d means doing at least one of this day's practices. Reflects the organization/county/name/tenure filters above."
+    ? `Showing the practice with the largest baseline-to-endline change${featuredPractice ? ` (${featuredPractice.change >= 0 ? "+" : ""}${featuredPractice.change.toFixed(1)}pp)` : ""}. Reflects the organization/county/name/tenure filters above.`
     : "Reflects the organization/county/name/tenure filters above.";
   alluvialPanel.innerHTML = `
     <h2>Farmer Transitions: ${alluvialTitle}</h2>
-    <div class="panel-sub">${alluvialNote} Change the Practice dropdown to switch between all practices combined and a single practice.</div>
+    <div class="panel-sub">${alluvialNote} Change the Practice dropdown to switch between the featured practice and a single practice.</div>
     <div id="alluvial-${day}" style="min-height:300px;"></div>
   `;
   container.appendChild(alluvialPanel);
   setTimeout(() => renderAlluvialSVG(`alluvial-${day}`, computeTransitionsJS(alluvialSource)), 0);
 
-  // --- New vs Old tenure comparison (replaces the old featured-practice view) ---
+  // --- New vs Old tenure comparison, baseline and endline shown as two
+  // side-by-side charts instead of one combined stacked chart. ---
   const tenurePanel = document.createElement("div");
   tenurePanel.className = "panel";
   const tenureSummary = summarizeByPracticeAndTenure(orgCountyNameFiltered);
   const unknownCount = uniqueFarmerCount(orgCountyNameFiltered.filter((r) => r.tenure === "Unknown"));
+  const tenureChartHeight = Math.max(360, tenureSummary.length * 46);
   tenurePanel.innerHTML = `
     <h2>Practice Adoption: New vs Old Farmers</h2>
     <div class="panel-sub">
@@ -1124,22 +1145,56 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f) {
       Reflects organization/county/name filters above, but ignores the Tenure filter since both groups are always shown here.
       ${unknownCount > 0 ? `${unknownCount} farmer(s) with unknown tenure are excluded from this chart.` : ""}
     </div>
-    <div class="chart-wrap" style="height:${Math.max(360, tenureSummary.length * 46)}px;"><canvas id="tenure-compare-${day}"></canvas></div>
+    <div class="two-col-even">
+      <div>
+        <div class="chart-subtitle">Baseline</div>
+        <div class="chart-wrap" style="height:${tenureChartHeight}px;"><canvas id="tenure-compare-baseline-${day}"></canvas></div>
+      </div>
+      <div>
+        <div class="chart-subtitle">Endline</div>
+        <div class="chart-wrap" style="height:${tenureChartHeight}px;"><canvas id="tenure-compare-endline-${day}"></canvas></div>
+      </div>
+    </div>
   `;
   container.appendChild(tenurePanel);
-  setTimeout(() => renderTenureComparisonChart(`tenure-compare-${day}`, tenureSummary), 0);
+  setTimeout(() => {
+    renderTenureComparisonChart(`tenure-compare-baseline-${day}`, tenureSummary, "Baseline");
+    renderTenureComparisonChart(`tenure-compare-endline-${day}`, tenureSummary, "Endline");
+  }, 0);
 
-  // --- Live treemap of reasons (all practices, respects filters above) ---
+  // --- Live treemap of reasons. Now respects the Practice filter above:
+  // "All" dedupes each reason to one count per farmer across every
+  // practice; picking a single practice narrows the source records to just
+  // that practice first, so each farmer contributes at most one row and a
+  // box's count is a plain farmer headcount for that one practice. ---
   const treemapPanel = document.createElement("div");
   treemapPanel.className = "panel";
-  const reasons = reasonCounts(coreFiltered);
+  const reasonSource = f.practice === "All" ? coreFiltered : coreFiltered.filter((r) => r.question === f.practice);
+  const reasonScopeLabel = f.practice === "All"
+    ? "All Practices"
+    : (coreFiltered.find((r) => r.question === f.practice) || {}).shortLabel || f.practice;
+  const nonAdoptionRecords = reasonSource.filter((r) => r.endline === 0 && r.reasonCategory);
+  const reasons = reasonCounts(reasonSource);
+  const uniqueNonAdopters = uniqueFarmerCount(nonAdoptionRecords);
+  const selectedReason = STATE.selectedReason[day] || null;
+  const reasonNote = f.practice === "All"
+    ? "Each box counts the unique farmers who gave that reason for not doing at least one practice - a farmer citing the same reason for several practices only counts once in that box. A farmer who gives different reasons for different practices can still show up in more than one box, which is why the boxes can add up to more than the farmer headcount below. Pick a single practice from the Practice dropdown above to see reasons for just that practice, where each box is a plain farmer headcount for that one practice."
+    : `Showing reasons for ${reasonScopeLabel} only (per the Practice filter above). Each farmer gives at most one reason for a given practice, so no box here can exceed the farmers surveyed at endline below.`;
   treemapPanel.innerHTML = `
-    <h2>Reasons for Non-Adoption (All Practices)</h2>
-    <div class="panel-sub">Reflects the organization/county/name/tenure filters above. Box size = number of farmer-practice instances.</div>
+    <h2>Reasons for Non-Adoption (${reasonScopeLabel})</h2>
+    <div class="panel-sub">Reflects the organization/county/name/tenure/practice filters above. ${reasonNote}</div>
+    <div class="panel-sub" style="margin-top:-10px;">${uniqueNonAdopters} of ${typeof nEndlineFiltered === "number" ? nEndlineFiltered : "?"} farmers surveyed at endline gave a reason for not doing ${f.practice === "All" ? "at least one practice" : reasonScopeLabel}${f.practice === "All" ? `, across ${nonAdoptionRecords.length} practice-level reason(s) in total` : ""}. Click a box to see the farmers behind it${f.practice === "All" ? " and which practice they cited it for" : ""}.</div>
     <div id="treemap-${day}" style="position:relative; height:420px; border:1px solid var(--line); border-radius:4px; overflow:hidden;"></div>
+    <div id="treemap-drill-${day}" style="margin-top:14px;"></div>
   `;
   container.appendChild(treemapPanel);
-  setTimeout(() => renderTreemapDiv(`treemap-${day}`, reasons), 0);
+  setTimeout(() => {
+    renderTreemapDiv(`treemap-${day}`, reasons, selectedReason, (reason) => {
+      STATE.selectedReason[day] = STATE.selectedReason[day] === reason ? null : reason;
+      renderMain();
+    });
+    renderReasonDrilldown(`treemap-drill-${day}`, nonAdoptionRecords, selectedReason, day);
+  }, 0);
 
   return container;
 }
@@ -1177,24 +1232,26 @@ function summarizeByPracticeAndTenure(records) {
   return out;
 }
 
-function renderTenureComparisonChart(canvasId, summary) {
+// period is "Baseline" or "Endline" - each call renders just that one
+// round's New-vs-Old bars, so the two rounds can sit side by side as two
+// separate charts instead of one chart with both rounds stacked together.
+function renderTenureComparisonChart(canvasId, summary, period) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
 
   const labels = summary.map((s) => s.label);
+  const doingField = period === "Baseline" ? "BaseDoing" : "EndDoing";
+  const notDoingField = period === "Baseline" ? "BaseNotDoing" : "EndNotDoing";
 
-  // Every dataset carries _tenure/_period/_role metadata used only by the
-  // tooltip - kept separate from `label`, which controls the legend. That
-  // way hiding a dataset from the legend (there'd otherwise be 8 entries)
-  // never hides its tooltip: baseline AND endline, doing AND not-doing all
-  // get a hover readout that names which one you're looking at.
-  const mkBar = (tenure, period, role, field, color, showInLegend, legendText) => ({
-    label: showInLegend ? legendText : `_${tenure} ${period} ${role}`,
-    stack: `${tenure}${period}`,
+  // Every dataset carries _tenure/_role metadata used only by the tooltip -
+  // kept separate from `label`, which controls the legend.
+  const mkBar = (tenure, role, field, color, legendText) => ({
+    label: legendText,
+    stack: tenure,
     backgroundColor: color,
     data: summary.map((s) => s[field]),
-    _tenure: tenure, _period: period, _role: role,
+    _tenure: tenure, _role: role,
   });
 
   STATE.charts[canvasId] = new Chart(ctx, {
@@ -1202,14 +1259,10 @@ function renderTenureComparisonChart(canvasId, summary) {
     data: {
       labels,
       datasets: [
-        mkBar("New", "Baseline", "doing", "newBaseDoing", COLORS.green, true, "New: Doing"),
-        mkBar("New", "Baseline", "notdoing", "newBaseNotDoing", COLORS.ochre, true, "New: Not doing"),
-        mkBar("New", "Endline", "doing", "newEndDoing", COLORS.green, false),
-        mkBar("New", "Endline", "notdoing", "newEndNotDoing", COLORS.ochre, false),
-        mkBar("Old", "Baseline", "doing", "oldBaseDoing", COLORS.navy, true, "Old: Doing"),
-        mkBar("Old", "Baseline", "notdoing", "oldBaseNotDoing", "#c1272d", true, "Old: Not doing"),
-        mkBar("Old", "Endline", "doing", "oldEndDoing", COLORS.navy, false),
-        mkBar("Old", "Endline", "notdoing", "oldEndNotDoing", "#c1272d", false),
+        mkBar("New", "doing", `new${doingField}`, COLORS.green, "New: Doing"),
+        mkBar("New", "notdoing", `new${notDoingField}`, COLORS.ochre, "New: Not doing"),
+        mkBar("Old", "doing", `old${doingField}`, COLORS.navy, "Old: Doing"),
+        mkBar("Old", "notdoing", `old${notDoingField}`, "#c1272d", "Old: Not doing"),
       ],
     },
     options: {
@@ -1217,10 +1270,12 @@ function renderTenureComparisonChart(canvasId, summary) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Left to right within each practice: New-Baseline, New-Endline, Old-Baseline, Old-Endline", font: { size: 12 }, position: "bottom" },
-        legend: {
-          labels: { filter: (item) => !item.text.startsWith("_") },
-        },
+        title: { display: true, text: `${period}: New vs Old`, font: { size: 12 }, position: "bottom" },
+        // Both charts share the exact same 4 series/colors (New/Old x
+        // Doing/Not doing) - showing the legend on just the Baseline chart
+        // avoids printing the same legend twice for what's effectively one
+        // shared key.
+        legend: { display: period === "Baseline" },
         tooltip: {
           callbacks: {
             label: (ctx) => {
@@ -1228,7 +1283,7 @@ function renderTenureComparisonChart(canvasId, summary) {
               const s = summary[ctx.dataIndex];
               const n = ds._tenure === "New" ? s.newN : s.oldN;
               const roleText = ds._role === "doing" ? "Doing" : "Not doing";
-              return `${ds._tenure}: ${roleText} (${ds._period}): ${ctx.raw} of ${n} farmers`;
+              return `${ds._tenure}: ${roleText} (${period}): ${ctx.raw} of ${n} farmers`;
             },
           },
         },
@@ -1372,7 +1427,7 @@ function squarifyJS(sizes, x, y, dx, dy) {
 const TREEMAP_PALETTE = ["#2E3B52", "#3F7D4B", "#C98A2B", "#A64B2A", "#6B8F71", "#8C6A45",
   "#5B7EA6", "#B08968", "#7A9E7E", "#9C6644", "#4A6670", "#C77B5A"];
 
-function renderTreemapDiv(containerId, reasons) {
+function renderTreemapDiv(containerId, reasons, selectedReason, onSelect) {
   const el = document.getElementById(containerId);
   if (!el) { return; }
   if (!reasons.length) {
@@ -1397,15 +1452,79 @@ function renderTreemapDiv(containerId, reasons) {
     const area = r.dx * r.dy;
     const fontSize = area > 60 ? 12 : area > 20 ? 10.5 : 9;
     const showLabel = area > 8;
+    const isSelected = item.reason === selectedReason;
+    const isClickable = item.reason !== "Other reasons";
     return `
-      <div style="position:absolute; left:${(r.x / W) * 100}%; top:${(r.y / H) * 100}%; width:${(r.dx / W) * 100}%; height:${(r.dy / H) * 100}%;
-                  background:${color}; border:1px solid #fff; box-sizing:border-box; display:flex; align-items:center; justify-content:center;
-                  padding:4px; overflow:hidden; text-align:center;">
-        ${showLabel ? `<span style="font-size:${fontSize}px; color:${area > 150 ? "#fff" : COLORS.ink}; line-height:1.25;">${item.reason}<br><strong>${item.n} (${pctVal}%)</strong></span>` : ""}
+      <div data-reason-index="${i}" style="position:absolute; left:${(r.x / W) * 100}%; top:${(r.y / H) * 100}%; width:${(r.dx / W) * 100}%; height:${(r.dy / H) * 100}%;
+                  background:${color}; border:${isSelected ? `3px solid ${COLORS.ink}` : "1px solid #fff"}; box-sizing:border-box; display:flex; align-items:center; justify-content:center;
+                  padding:4px; overflow:hidden; text-align:center; ${isClickable ? "cursor:pointer;" : ""}">
+        ${showLabel ? `<span style="font-size:${fontSize}px; color:${area > 150 ? "#fff" : COLORS.ink}; line-height:1.25;">${item.reason}<br><strong>${item.n} farmer(s) (${pctVal}%)</strong></span>` : ""}
       </div>`;
   }).join("");
 
   el.innerHTML = `<div style="position:relative; width:100%; height:100%;">${divs}</div>`;
+
+  if (onSelect) {
+    el.querySelectorAll("[data-reason-index]").forEach((div) => {
+      const idx = parseInt(div.getAttribute("data-reason-index"), 10);
+      const item = items[idx];
+      if (item.reason === "Other reasons") return;
+      div.addEventListener("click", () => onSelect(item.reason));
+    });
+  }
+}
+
+// Drill-down table shown under the treemap: every farmer/practice pair
+// behind the currently-selected reason category, so a summary box can be
+// traced back to individual farmers and the specific practice they cited
+// it for.
+function renderReasonDrilldown(containerId, nonAdoptionRecords, selectedReason, day) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!selectedReason) { el.innerHTML = ""; return; }
+
+  const rows = nonAdoptionRecords
+    .filter((r) => r.reasonCategory === selectedReason)
+    .sort((a, b) => a.farmerName.localeCompare(b.farmerName) || a.shortLabel.localeCompare(b.shortLabel));
+  const farmerCount = uniqueFarmerCount(rows);
+
+  el.innerHTML = `
+    <div class="panel" style="border:1px solid var(--line);">
+      <h2 style="font-size:15px;">${selectedReason} - ${farmerCount} farmer(s), ${rows.length} practice-level instance(s)</h2>
+      ${rows.length ? `
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th><th>Practice</th></tr></thead>
+            <tbody>
+              ${rows.map((r) => `<tr><td>${r.farmerName}</td><td>${r.organization}</td><td>${r.county}</td><td>${r.tenure}</td><td>${r.shortLabel}</td></tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <button class="btn" id="export-drill-${day}">Export list (CSV)</button>
+          <button class="btn" id="close-drill-${day}">Close</button>
+        </div>
+      ` : `
+        <div class="empty-note">No records for this reason under the current filters.</div>
+        <div class="table-footer"><button class="btn" id="close-drill-${day}">Close</button></div>
+      `}
+    </div>
+  `;
+  el.querySelector(`#close-drill-${day}`).addEventListener("click", () => {
+    STATE.selectedReason[day] = null;
+    renderMain();
+  });
+  if (rows.length) {
+    el.querySelector(`#export-drill-${day}`).addEventListener("click", () => {
+      passwordGatedDownload(rows, [
+        { label: "Farmer", get: (r) => r.farmerName },
+        { label: "Organization", get: (r) => r.organization },
+        { label: "County", get: (r) => r.county },
+        { label: "Tenure", get: (r) => r.tenure },
+        { label: "Practice", get: (r) => r.shortLabel },
+      ], `day${day}_${selectedReason.replace(/[^a-z0-9]+/gi, "_")}_reason_detail.csv`);
+    });
+  }
 }
 
 function openLightbox(src) {

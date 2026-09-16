@@ -432,6 +432,32 @@
     }
   }
 
+  .two-col-even {
+    display: grid;
+
+    grid-template-columns: 1fr 1fr;
+
+    gap: 22px;
+  }
+
+  @media (max-width: 900px) {
+    .two-col-even {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .chart-subtitle {
+    font-size: 13px;
+
+    font-weight: 600;
+
+    color: var(--ink-muted);
+
+    text-align: center;
+
+    margin-bottom: 6px;
+  }
+
 
   /* =========================================================
      TABLE
