@@ -1107,7 +1107,7 @@ function buildFarmerTable(day, records, f) {
       });
     });
     wrap.querySelector(`#export-${day}`).addEventListener("click", () => {
-      downloadCSV(sorted, [
+      passwordGatedDownload(sorted, [
         { label: "Farmer", get: (r) => r.farmerName },
         { label: "Organization", get: (r) => r.organization },
         { label: "County", get: (r) => r.county },
