@@ -1214,7 +1214,7 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
   const uniqueNonAdopters = uniqueFarmerCount(nonAdoptionRecords);
   const selectedReason = STATE.selectedReason[day] || null;
   const reasonNote = f.practice === "All"
-    ? "Each box counts the unique farmers who gave that reason for not doing at least one practice - a farmer citing the same reason for several practices only counts once in that box. A farmer who gives different reasons for different practices can still show up in more than one box, which is why the boxes can add up to more than the farmer headcount below. Pick a single practice from the Practice dropdown above to see reasons for just that practice, where each box is a plain farmer headcount for that one practice."
+    ? "Each box counts the unique farmers who gave that reason for not doing at least one practice. Pick a single practice from the Practice dropdown above to see reasons for just that practice."
     : `Showing reasons for ${reasonScopeLabel} only (per the Practice filter above). Each farmer gives at most one reason for a given practice, so no box here can exceed the farmers surveyed at endline below.`;
   treemapPanel.innerHTML = `
     <h2>Reasons for Non-Adoption (${reasonScopeLabel})</h2>
