@@ -175,11 +175,11 @@ DAY_SHEET = {
     5: "Individual_Transitions",
 }
 DAY_COLUMNS = {
-    1: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline_Code", "reason": "Category"},
-    2: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
-    3: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
-    4: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
-    5: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category"},
+    1: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline_Code", "reason": "Category", "question_text": "Question_Text", "narrative": "Narrative"},
+    2: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
+    3: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
+    4: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
+    5: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
 }
 
 # A handful of names in the cleaned workbooks refer to a combined multi-
@@ -426,6 +426,23 @@ def build_day(day_num, label_lookup, tenure_lookup):
     df.columns = [str(c).strip() for c in df.columns]
     cols = DAY_COLUMNS[day_num]
 
+    # Some workbooks include their own Question_Text column. We still prefer
+    # the OLD dashboard's label_lookup first (it carries the manually-
+    # curated short label style, e.g. "Leave.Crop.Residue", that a raw
+    # Question_Text sentence doesn't match) - this is only a fallback for a
+    # question that label_lookup has never seen before (newly added,
+    # renumbered, etc.), so it reads as an actual question instead of a
+    # bare code like "Q9".
+    text_col = cols.get("question_text")
+    sheet_text_lookup = {}
+    if text_col and text_col in df.columns:
+        for _, r in df[[cols["question"], text_col]].dropna().iterrows():
+            qq = str(r[cols["question"]]).strip()
+            if qq and qq not in sheet_text_lookup:
+                txt = str(r[text_col]).strip()
+                if txt:
+                    sheet_text_lookup[qq] = txt
+
     match_tiers = {}
     unmatched_names = set()
     matched_fids = set()
@@ -466,7 +483,28 @@ def build_day(day_num, label_lookup, tenure_lookup):
             if reason_str and reason_str.lower() not in ("nan", "none"):
                 reason = reason_str
 
-        short_label, question_text = label_lookup.get((day_num, q), (q, q))
+        # Narrative is a free-text field the enumerator wrote for this
+        # farmer/question, independent of the coded Reason_Category theme -
+        # captured for every row (not just non-adopters) so the
+        # Farmer-Level Detail table can show it regardless of baseline/
+        # endline status.
+        narrative = None
+        narrative_col = cols.get("narrative")
+        if narrative_col:
+            narrative_val = row.get(narrative_col)
+            if narrative_val is not None and not (isinstance(narrative_val, float) and np.isnan(narrative_val)):
+                narrative_str = str(narrative_val).strip()
+                if narrative_str and narrative_str.lower() not in ("nan", "none"):
+                    narrative = narrative_str
+
+        short_label, question_text = label_lookup.get((day_num, q), (None, None))
+        if question_text is None:
+            # Not in the OLD dashboard's history (new/renumbered question) -
+            # use the workbook's own Question_Text if we found one for this
+            # code, otherwise fall back to the bare code as a last resort.
+            fallback_text = sheet_text_lookup.get(q, q)
+            short_label = fallback_text
+            question_text = fallback_text
         records.append({
             "day": day_num,
             "question": q,
@@ -479,6 +517,7 @@ def build_day(day_num, label_lookup, tenure_lookup):
             "baseline": base,
             "endline": end,
             "reasonCategory": reason,
+            "narrative": narrative,
         })
 
     if unmatched_names:

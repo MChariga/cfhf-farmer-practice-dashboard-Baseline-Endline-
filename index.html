@@ -295,6 +295,88 @@
     align-self: center;
   }
 
+  /* Multi-select filter fields (Organization/County/Tenure/status) - a
+     button styled like the existing native selects, opening a checkbox
+     panel so more than one value can be chosen at once. */
+  .multiselect {
+    position: relative;
+  }
+
+  .multiselect-trigger {
+    font-family: inherit;
+    font-size: 13.5px;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--ink);
+    min-width: 150px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .multiselect-trigger span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .multiselect-trigger:focus {
+    outline: 2px solid var(--ochre);
+    outline-offset: 1px;
+  }
+
+  .multiselect.is-disabled .multiselect-trigger {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .ms-caret {
+    font-size: 10px;
+    color: var(--ink-muted);
+    flex-shrink: 0;
+  }
+
+  .multiselect-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 60;
+
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+
+    padding: 6px 0;
+    min-width: 200px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 5px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .multiselect-option:hover {
+    background: var(--ochre-soft, #F6E9D2);
+  }
+
+  .multiselect-option input {
+    margin: 0;
+  }
+
   button.btn {
     font-family: inherit;
 
@@ -423,6 +505,24 @@
     font-size: 17px;
 
     margin-bottom: 4px;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .panel-header h2 {
+    margin-bottom: 4px;
+  }
+
+  .dl-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .panel .panel-sub {
