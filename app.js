@@ -666,10 +666,8 @@ function bgRain(right, delay) {
 // complements the existing per-day summary without replacing it.
 // "Surveyed at both" dedupes by Farmer_ID and uses the same "found at
 // endline on any day" definition as the overall/day-level KPI cards, not a
-// per-day retention rate. "Uptake" = baseline Not-doing -> endline Doing,
-// out of every practice-instance where the farmer wasn't already doing it -
-// the same "newly uptaken" definition used in the Practice Uptake Overview
-// chart on each day's page.
+// per-day retention rate.
+// ---------------------------------------------------------------------------
 function computeOrgSummary() {
   const identity = {};
   function ensureIdentity(org) {
@@ -687,15 +685,8 @@ function computeOrgSummary() {
     });
   });
 
-  const uptakeByOrg = {};
   const reasonByOrg = {};
   DASHBOARD_DATA.records.forEach((r) => {
-    if (!uptakeByOrg[r.organization]) uptakeByOrg[r.organization] = { newlyUptaken: 0, eligible: 0 };
-    const u = uptakeByOrg[r.organization];
-    if (r.baseline === 0) {
-      u.eligible++;
-      if (r.endline === 1) u.newlyUptaken++;
-    }
     if (r.endline === 0 && r.reasonCategory) {
       if (!reasonByOrg[r.organization]) reasonByOrg[r.organization] = {};
       reasonByOrg[r.organization][r.reasonCategory] = (reasonByOrg[r.organization][r.reasonCategory] || 0) + 1;
@@ -708,7 +699,6 @@ function computeOrgSummary() {
       const d = identity[org];
       const baseline = d.baselineIds.size;
       const both = d.bothIds.size;
-      const u = uptakeByOrg[org] || { newlyUptaken: 0, eligible: 0 };
       const reasons = reasonByOrg[org] || {};
       const topReasonEntry = Object.entries(reasons).sort((a, b) => b[1] - a[1])[0];
       return {
@@ -717,9 +707,6 @@ function computeOrgSummary() {
         both,
         bothPct: baseline ? (100 * both / baseline) : 0,
         notFound: baseline - both,
-        newlyUptaken: u.newlyUptaken,
-        eligible: u.eligible,
-        uptakeRate: u.eligible ? (100 * u.newlyUptaken / u.eligible) : 0,
         topReason: topReasonEntry ? topReasonEntry[0] : "-",
         topReasonCount: topReasonEntry ? topReasonEntry[1] : 0,
         counties: Array.from(d.counties).sort(),
@@ -799,11 +786,11 @@ function buildOrgSummaryPanel() {
   const orgSummary = computeOrgSummary();
   panel.innerHTML = `
     <h2>Organization Summary</h2>
-    <div class="panel-sub">One row per partner organization, aggregated across all 5 training days. "Surveyed at both" is a farmer found at baseline and at endline (on any day), deduped by Farmer_ID. "Newly uptaken" counts practice-instances, not farmers: the denominator is every practice a farmer wasn't yet doing at baseline (one farmer not doing 5 practices contributes 5), and the numerator is how many of those became "doing" by endline - same definitions used elsewhere in this dashboard.</div>
+    <div class="panel-sub">One row per partner organization, aggregated across all 5 training days. "Surveyed at both" is a farmer found at baseline and at endline (on any day), deduped by Farmer_ID.</div>
     <div class="table-scroll">
       <table class="data-table">
         <thead><tr>
-          <th>Organization</th><th>Baseline Surveyed</th><th>Surveyed at Both</th><th>Not Found at Endline</th><th>Newly Uptaken (of not-yet-doing instances)</th><th>Top Reason for Non-Adoption</th><th>Counties</th>
+          <th>Organization</th><th>Baseline Surveyed</th><th>Surveyed at Both</th><th>Not Found at Endline</th><th>Top Reason for Non-Adoption</th><th>Counties</th>
         </tr></thead>
         <tbody>
           ${orgSummary.map((o) => `
@@ -812,7 +799,6 @@ function buildOrgSummaryPanel() {
               <td>${o.baseline}</td>
               <td>${o.both} (${o.bothPct.toFixed(1)}%)</td>
               <td>${o.notFound}</td>
-              <td>${o.newlyUptaken} of ${o.eligible} instances (${o.uptakeRate.toFixed(1)}%)</td>
               <td>${o.topReason}${o.topReasonCount ? ` (${o.topReasonCount})` : ""}</td>
               <td>${o.counties.join(", ")}</td>
             </tr>
@@ -832,8 +818,6 @@ function buildOrgSummaryPanel() {
       { label: "Surveyed at Both Baseline and Endline", get: (o) => o.both },
       { label: "Surveyed at Both (%)", get: (o) => o.bothPct.toFixed(1) },
       { label: "Not Found at Endline", get: (o) => o.notFound },
-      { label: "Newly Uptaken (practice-instances)", get: (o) => o.newlyUptaken },
-      { label: "Not-Yet-Doing Instances (denominator)", get: (o) => o.eligible },
       { label: "Uptake Rate (%)", get: (o) => o.uptakeRate.toFixed(1) },
       { label: "Top Reason for Non-Adoption", get: (o) => o.topReason },
       { label: "Counties", get: (o) => o.counties.join("; ") },
@@ -1612,82 +1596,6 @@ function computeTransitionsByPractice(records) {
   return Array.from(byQ.values()).sort((a, b) => (b.started + b.stayedDoing) - (a.started + a.stayedDoing));
 }
 
-// Rolls the ~250 distinct free-text-coded Reason_Category values down to the
-// handful of diagnostic buckets that actually answer the evaluation's core
-// question (Project Background tab): is low adoption a communication gap on
-// the trainers' side, a mismatch between what MHAC assumed was relevant/in
-// place, or a mismatch with what farmers themselves saw as relevant in
-// their own context? Keyword match, first bucket that matches wins.
-const BARRIER_BUCKETS = {
-  prereq: { label: "Prerequisite not yet in place", color: "#7A5C82" },
-  knowledge: { label: "Knowledge/communication gap", color: COLORS.navy },
-  progress: { label: "In progress / intends to adopt", color: COLORS.green },
-  resource: { label: "Resource/access constraint", color: COLORS.rust },
-  relevance: { label: "Relevance/priority mismatch", color: COLORS.ochre },
-  other: { label: "Other/unclear", color: "#CCCCCC" },
-};
-
-function classifyBarrier(reasonCategory) {
-  const r = reasonCategory.toLowerCase();
-  if (["no value-added product exists", "no microgarden exists", "relies purely on rainfall - no active irrigation",
-       "not applicable - no livestock owned", "not applicable - no compost/manure present",
-       "no breeding activities currently", "no striga problem", "not applicable to this farmer",
-       "no enough animals to generate", "field currently empty/crop failure"].some((k) => r.includes(k))) {
-    return "prereq";
-  }
-  if (["knowledge/skill gap", "forgot", "misunderstood", "never learned", "missed training",
-       "not recorded", "misplaced response", "narrative appears to describe a different question"].some((k) => r.includes(k))) {
-    return "knowledge";
-  }
-  if (["intends to adopt", "planned for"].some((k) => r.includes(k))) {
-    return "progress";
-  }
-  if (["constraint", "shortage", "lacks equipment", "lacks capital", "no/inadequate structures",
-       "no rainwater harvesting infrastructure", "insufficient scale", "insufficient",
-       "security/safety concern", "difficult to track", "land tenure", "no decision-making authority",
-       "relies on parents", "attempted but failed", "attempted but not established",
-       "age-related", "health", "caregiving", "schooling", "personal circumstance"].some((k) => r.includes(k))) {
-    return "resource";
-  }
-  if (["low priority", "prefers ", "no need", "not applicable", "sells locally", "for family consumption",
-       "relies on ", "uses an alternative", "uses purchased", "uses homemade", "feeds fresh",
-       "perceived ineffectiveness", "perceived no need", "perceived low benefit", "fear, distrust",
-       "social/cultural barrier", "convenience/availability", "confirmed replanting/preserving own seed",
-       "confirmed monocropping", "buys instead of growing own", "single livestock species",
-       "alternative use", "alternative approach", "implemented for an alternative purpose",
-       "cost-saving", "palatability/taste aversion", "not yet produced enough", "new to farming",
-       "new to the practice", "prefers own seed", "prefers conventional", "distrust of purchased",
-       "discouraged or apprehensive", "less/low interest", "low interest", "not planned/considered",
-       "not attempted - relies on memory", "focus is on other farm enterprises", "beans only",
-       "environmental constraint", "environmental/weather constraint"].some((k) => r.includes(k))) {
-    return "relevance";
-  }
-  return "other";
-}
-
-// One row per practice: how many non-adoption reasons fall into each
-// diagnostic bucket, plus n (total farmers who answered that question).
-function computeBarrierBreakdownByPractice(records) {
-  const byQ = new Map();
-  records.forEach((r) => {
-    if (!byQ.has(r.question)) {
-      byQ.set(r.question, { question: r.question, label: r.shortLabel, n: 0, prereq: 0, knowledge: 0, progress: 0, resource: 0, relevance: 0, other: 0 });
-    }
-    const b = byQ.get(r.question);
-    b.n++;
-    if (r.endline === 0 && r.reasonCategory) {
-      b[classifyBarrier(r.reasonCategory)]++;
-    }
-  });
-  return Array.from(byQ.values())
-    .filter((b) => b.prereq + b.knowledge + b.progress + b.resource + b.relevance + b.other > 0)
-    .sort((a, b) => {
-      const totalA = a.prereq + a.knowledge + a.progress + a.resource + a.relevance + a.other;
-      const totalB = b.prereq + b.knowledge + b.progress + b.resource + b.relevance + b.other;
-      return totalB - totalA;
-    });
-}
-
 // Practice uptake overview: one lollipop-style chart, one practice per x
 // position, three series grouped together per practice - scoped to
 // whichever practices are currently selected (all, one, or several).
@@ -1856,37 +1764,6 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
     addSVGDownloadButton(treemapPanel, () => buildTreemapSVGString(reasons), `day${day}_reasons_for_non_adoption.svg`);
   }, 0);
 
-  // --- Diagnosis: why isn't it sticking? Rolls the fine-grained reasons
-  // above into the handful of buckets that answer the evaluation's actual
-  // question - a communication gap, an MHAC-assumption mismatch (resource
-  // constraint or a prerequisite practice not yet in place), or a
-  // relevance judgment the farmer made themselves. Same reasonSource, so
-  // it respects every filter above including which practice(s) are picked. ---
-  const barrierPanel = document.createElement("div");
-  barrierPanel.className = "panel";
-  const barrierSummary = computeBarrierBreakdownByPractice(reasonSource);
-  barrierPanel.innerHTML = `
-    <h2>Diagnosis: Why Isn't It Sticking?</h2>
-    <div class="panel-sub">
-      Answers this evaluation's core question per practice: is low adoption a <strong>communication gap</strong> on the trainers' side,
-      a mismatch between what MHAC assumed was <strong>already in place or feasible</strong>, or a <strong>relevance judgment</strong> the farmer made
-      themselves? "Prerequisite not yet in place" means the practice depends on an earlier-stage practice/asset (e.g. a value-added
-      product to package, a microgarden to irrigate) that the farmer hasn't reached yet - not a rejection of the practice itself.
-      "In progress" farmers already intend to adopt. n = total farmers who answered that question. Click a bar to focus on just that
-      practice and dim the rest; click again to clear.
-    </div>
-    ${barrierSummary.length ? `
-      <div class="chart-wrap" style="height:${Math.max(320, barrierSummary.length * 34)}px;"><canvas id="barrier-chart-${day}"></canvas></div>
-    ` : `<div class="empty-note">No non-adoption reasons match the current filters.</div>`}
-  `;
-  container.appendChild(barrierPanel);
-  if (barrierSummary.length) {
-    setTimeout(() => {
-      renderBarrierChart(`barrier-chart-${day}`, barrierSummary);
-      addChartDownloadButton(barrierPanel, `barrier-chart-${day}`, `day${day}_diagnosis_barriers.png`);
-    }, 0);
-  }
-
   return container;
 }
 
@@ -1965,54 +1842,6 @@ function renderTransitionStackChart(canvasId, summary) {
       },
       scales: {
         x: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
-        y: { stacked: true, ticks: { font: { size: 11 } } },
-      },
-    },
-  });
-  STATE.charts[canvasId] = chart;
-  wireBarFocusClick(chart, canvasId);
-}
-
-// One horizontal stacked bar per practice, split into the diagnostic
-// buckets from BARRIER_BUCKETS/classifyBarrier - same visual language as
-// the Transition Category Breakdown chart (horizontal, n in the label,
-// click-to-focus, downloadable).
-function renderBarrierChart(canvasId, summary) {
-  destroyChart(canvasId);
-  const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-
-  const keys = Object.keys(BARRIER_BUCKETS);
-  const chart = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: summary.map((s) => `${s.label} (n=${s.n})`),
-      datasets: keys.map((key) => ({
-        label: BARRIER_BUCKETS[key].label,
-        data: summary.map((s) => s[key]),
-        backgroundColor: BARRIER_BUCKETS[key].color,
-      })),
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      categoryPercentage: 0.72,
-      barPercentage: 0.92,
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10.5 } } },
-        tooltip: {
-          callbacks: {
-            label: (c) => {
-              const s = summary[c.dataIndex];
-              const total = keys.reduce((a, k) => a + s[k], 0);
-              return `${c.dataset.label}: ${c.raw} of ${total} reason(s) (${total ? ((c.raw / total) * 100).toFixed(0) : "0"}%)`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: { stacked: true, min: 0, title: { display: true, text: "Number of non-adoption reasons" } },
         y: { stacked: true, ticks: { font: { size: 11 } } },
       },
     },

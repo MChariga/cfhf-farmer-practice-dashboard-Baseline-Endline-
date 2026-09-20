@@ -175,7 +175,7 @@ DAY_SHEET = {
     5: "Individual_Transitions",
 }
 DAY_COLUMNS = {
-    1: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline_Code", "reason": "Category", "question_text": "Question_Text", "narrative": "Narrative"},
+    1: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Category", "question_text": "Question_Text", "narrative": "Narrative"},
     2: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
     3: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
     4: {"question": "Question", "farmer": "Farmer Name", "baseline": "Baseline", "endline": "Endline", "reason": "Reason_Category", "question_text": "Question_Text", "narrative": "Narrative"},
@@ -424,7 +424,22 @@ def build_day(day_num, label_lookup, tenure_lookup):
     hdr = find_header_row(path, sheet)
     df = pd.read_excel(path, sheet_name=sheet, header=hdr)
     df.columns = [str(c).strip() for c in df.columns]
-    cols = DAY_COLUMNS[day_num]
+    cols = dict(DAY_COLUMNS[day_num])
+
+    # Guard against the exact schema drift that broke Day 1 previously: if
+    # the configured endline/reason column name isn't actually in this
+    # workbook, fall back to whichever of the known alternate names is
+    # present, instead of silently returning zero rows.
+    if cols["endline"] not in df.columns:
+        for alt in ("Endline", "Endline_Code"):
+            if alt in df.columns:
+                cols["endline"] = alt
+                break
+    if cols["reason"] not in df.columns:
+        for alt in ("Category", "Reason_Category"):
+            if alt in df.columns:
+                cols["reason"] = alt
+                break
 
     # Some workbooks include their own Question_Text column. We still prefer
     # the OLD dashboard's label_lookup first (it carries the manually-
