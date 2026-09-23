@@ -34,12 +34,6 @@ const COLORS = {
   // same, while still reading as visibly "less saturated" than "doing".
   notDoingNew: "#B7C9AE",
   notDoingOld: "#DDBFA0",
-  // Dimmed/lighter variants used for the imported Bar_Charts panel's
-  // "Unverified" and "Attempted but failed" sub-categories, so each stays
-  // visibly a paler variant of its own family's main color.
-  navyDim: "#8A96AC",
-  ochreDim: "#DCAF6B",
-  grayDim: "#D8D8D8",
 };
 
 function defaultFilters() {
@@ -1147,10 +1141,13 @@ function buildDayView(day) {
   });
   // Same as coreFiltered but ignoring the Tenure dropdown - used only by the
   // New-vs-Old comparison chart, which always needs both groups present.
+  // Practice IS applied here (unlike Tenure) so picking a practice narrows
+  // that chart too, same as everything else on the page.
   const orgCountyNameFiltered = allRecords.filter((r) => {
     if (!matchesMulti(f.organization, r.organization)) return false;
     if (!matchesMulti(f.county, r.county)) return false;
     if (f.farmerSearch && !r.farmerName.toLowerCase().includes(f.farmerSearch.toLowerCase())) return false;
+    if (!matchesMulti(f.practice, r.question)) return false;
     return true;
   });
   const fullyFiltered = applyFilters(allRecords, f);
@@ -1557,7 +1554,7 @@ function computeTransitionsJS(records) {
 function computeUptakeCompositionByPractice(records) {
   const byQ = new Map();
   records.forEach((r) => {
-    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, sustained: 0, uptaken: 0, notObserved: 0, notPracticed: 0, n: 0 });
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, questionText: r.questionText, sustained: 0, uptaken: 0, notObserved: 0, notPracticed: 0, n: 0 });
     const b = byQ.get(r.question);
     b.n++;
     if (r.baseline === 1 && r.endline === 1) b.sustained++;
@@ -1570,21 +1567,26 @@ function computeUptakeCompositionByPractice(records) {
     .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
 }
 
-// Chart 3: farmers Sustained (baseline & endline both Doing) split by
-// whether the visit confirmed the practice in person or it was unverified
-// (self-reported, group-only, or a previously-lapsed-then-resumed case).
-function computeSustainedVerificationByPractice(records) {
+// Chart 3: BOTH "doing at endline" transition types - Continued (Sustained:
+// baseline & endline both Doing) and Uptaken (Newly adopted: baseline Not
+// doing, endline Doing) - each split by whether the endline visit confirmed
+// the practice in person (Confirmed) or the evidence was unverified
+// (self-reported, group-only, etc).
+function computeContinuedUptakenVerificationByPractice(records) {
   const byQ = new Map();
   records.forEach((r) => {
-    if (!(r.baseline === 1 && r.endline === 1)) return;
-    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, confirmed: 0, unverified: 0 });
+    const isContinued = r.baseline === 1 && r.endline === 1;
+    const isUptaken = r.baseline === 0 && r.endline === 1;
+    if (!isContinued && !isUptaken) return;
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, questionText: r.questionText, continuedConfirmed: 0, continuedUnverified: 0, uptakenConfirmed: 0, uptakenUnverified: 0 });
     const b = byQ.get(r.question);
     const d = r.transitionDetail || "";
-    if (d === "Sustained - Practice confirmed present") b.confirmed++;
-    else b.unverified++;
+    const confirmed = d.endsWith("- Practice confirmed present");
+    if (isContinued) { if (confirmed) b.continuedConfirmed++; else b.continuedUnverified++; }
+    else { if (confirmed) b.uptakenConfirmed++; else b.uptakenUnverified++; }
   });
   return Array.from(byQ.values())
-    .filter((b) => b.confirmed + b.unverified > 0)
+    .filter((b) => b.continuedConfirmed + b.continuedUnverified + b.uptakenConfirmed + b.uptakenUnverified > 0)
     .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
 }
 
@@ -1597,7 +1599,7 @@ function computeNotDoingBreakdownByPractice(records) {
     const isDiscontinued = r.baseline === 1 && r.endline === 0;
     const isNeverAdopted = r.baseline === 0 && r.endline === 0;
     if (!isDiscontinued && !isNeverAdopted) return;
-    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, notObserved: 0, notObservedFailed: 0, notPracticed: 0, notPracticedFailed: 0 });
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, questionText: r.questionText, notObserved: 0, notObservedFailed: 0, notPracticed: 0, notPracticedFailed: 0 });
     const b = byQ.get(r.question);
     const attemptedFailed = (r.transitionDetail || "").toLowerCase().includes("attempted but failed");
     if (isDiscontinued) {
@@ -1611,28 +1613,56 @@ function computeNotDoingBreakdownByPractice(records) {
     .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
 }
 
-// Shared renderer for Chart 1, 3 and 4 - all are "N series stacked
-// horizontal bar per practice", just with different series/colors.
-function renderStackedByPracticeChart(canvasId, labels, series) {
+// Updates a panel's "revealed question" line under the chart with the full
+// question text for whichever bar was last clicked (or a default prompt
+// when focus is cleared) - this is what lets the x-axis stay a compact
+// "Q1" while the full wording is still one click away.
+function updateRevealText(revealElId, summary, idx) {
+  const el = document.getElementById(revealElId);
+  if (!el) return;
+  if (idx === null || idx === undefined || !summary[idx]) {
+    el.textContent = "Click a bar to reveal the full question text.";
+    return;
+  }
+  const s = summary[idx];
+  el.textContent = `${s.question}: ${s.questionText || s.label}`;
+}
+
+// Shared renderer for Chart 1, 3 and 4 - all are "N series stacked vertical
+// bar per practice" (categories along the bottom, counts going up), with
+// short "Q1"/"Q2" tick labels and a click-to-reveal line underneath instead
+// of long wordy labels eating into the bar area.
+function renderStackedByPracticeChart(canvasId, summary, series, revealElId) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   const chart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels,
-      datasets: series.map((s) => ({ label: s.label, data: s.data, backgroundColor: s.color })),
+      labels: summary.map((s) => s.question),
+      datasets: series.map((s) => ({ label: s.label, data: s.data, backgroundColor: s.color, maxBarThickness: 60 })),
     },
     options: {
-      indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
-      categoryPercentage: 0.72,
-      barPercentage: 0.92,
+      categoryPercentage: 0.7,
+      barPercentage: 0.9,
+      onClick: (evt, elements) => {
+        const clicked = elements.length ? elements[0].index : null;
+        const current = STATE.chartFocus[canvasId];
+        const next = (clicked === null || current === clicked) ? null : clicked;
+        STATE.chartFocus[canvasId] = next;
+        applyBarFocus(chart, canvasId);
+        updateRevealText(revealElId, summary, next);
+      },
       plugins: {
         legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10.5 } } },
         tooltip: {
           callbacks: {
+            title: (items) => {
+              const s = summary[items[0].dataIndex];
+              return `${s.question}: ${s.questionText || s.label}`;
+            },
             label: (c) => {
               const total = series.reduce((a, s) => a + s.data[c.dataIndex], 0);
               return `${c.dataset.label}: ${c.raw} of ${total} (${total ? ((c.raw / total) * 100).toFixed(1) : "0.0"}%)`;
@@ -1641,36 +1671,46 @@ function renderStackedByPracticeChart(canvasId, labels, series) {
         },
       },
       scales: {
-        x: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
-        y: { stacked: true, ticks: { font: { size: 11 } } },
+        x: { stacked: true, ticks: { font: { size: 12 } } },
+        y: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
       },
     },
   });
   STATE.charts[canvasId] = chart;
-  wireBarFocusClick(chart, canvasId);
 }
 
-// Chart 2: single-series horizontal bar of % doing at endline per practice.
-function renderUptakePercentChart(canvasId, summary) {
+// Chart 2: single-series vertical bar of % doing at endline per practice.
+function renderUptakePercentChart(canvasId, summary, revealElId) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   const chart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels: summary.map((s) => `${s.label} (n=${s.n})`),
-      datasets: [{ label: "Uptake at endline", data: summary.map((s) => s.pctUptake), backgroundColor: COLORS.ochre, maxBarThickness: 22 }],
+      labels: summary.map((s) => s.question),
+      datasets: [{ label: "Uptake at endline", data: summary.map((s) => s.pctUptake), backgroundColor: "#1F4E78", maxBarThickness: 60 }],
     },
     options: {
-      indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
-      categoryPercentage: 0.72,
-      barPercentage: 0.92,
+      categoryPercentage: 0.7,
+      barPercentage: 0.9,
+      onClick: (evt, elements) => {
+        const clicked = elements.length ? elements[0].index : null;
+        const current = STATE.chartFocus[canvasId];
+        const next = (clicked === null || current === clicked) ? null : clicked;
+        STATE.chartFocus[canvasId] = next;
+        applyBarFocus(chart, canvasId);
+        updateRevealText(revealElId, summary, next);
+      },
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
+            title: (items) => {
+              const s = summary[items[0].dataIndex];
+              return `${s.question}: ${s.questionText || s.label}`;
+            },
             label: (c) => {
               const s = summary[c.dataIndex];
               return `${c.raw.toFixed(1)}% doing at endline (${s.sustained + s.uptaken} of ${s.n})`;
@@ -1679,19 +1719,20 @@ function renderUptakePercentChart(canvasId, summary) {
         },
       },
       scales: {
-        x: { min: 0, max: 100, title: { display: true, text: "% doing at endline" } },
-        y: { ticks: { font: { size: 11 } } },
+        x: { ticks: { font: { size: 12 } } },
+        y: { min: 0, max: 100, title: { display: true, text: "% doing at endline" } },
       },
     },
   });
   STATE.charts[canvasId] = chart;
-  wireBarFocusClick(chart, canvasId);
 }
 
 // Builds the whole imported-from-Excel panel: Chart 1 + Chart 2 side by
 // side, Chart 3 + Chart 4 side by side below.
 function buildImportedBarChartsPanel(day, records) {
   const container = document.createElement("div");
+  const CHART_HEIGHT = 420;
+  const revealBlock = (id) => `<div class="panel-sub" id="${id}" style="margin-top:8px; font-weight:600;">Click a bar to reveal the full question text.</div>`;
 
   const compSummary = computeUptakeCompositionByPractice(records);
   const row1 = document.createElement("div");
@@ -1700,37 +1741,37 @@ function buildImportedBarChartsPanel(day, records) {
   chart1Panel.className = "panel";
   chart1Panel.innerHTML = `
     <h2>Chart 1: Transition Composition per Practice</h2>
-    <div class="panel-sub">Sustained (doing at both baseline and endline), Newly adopted, Discontinued, and Never adopted, per practice. Reflects the filters above. Click a bar to focus on just that practice and dim the rest.</div>
-    ${compSummary.length ? `<div class="chart-wrap" style="height:${Math.max(320, compSummary.length * 34)}px;"><canvas id="bc1-${day}"></canvas></div>` : `<div class="empty-note">No practices match the current filters.</div>`}
+    <div class="panel-sub">Sustained, Newly adopted, Discontinued, and Never adopted, per practice. Reflects the filters above. Click a bar to focus on it (and see the full question below).</div>
+    ${compSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc1-${day}"></canvas></div>${revealBlock(`bc1-reveal-${day}`)}` : `<div class="empty-note">No practices match the current filters.</div>`}
   `;
   const chart2Panel = document.createElement("div");
   chart2Panel.className = "panel";
   chart2Panel.innerHTML = `
     <h2>Chart 2: Overall Uptake % per Practice</h2>
     <div class="panel-sub">Share of farmers doing the practice at endline (Sustained + Newly adopted), per practice. Same practice order as Chart 1.</div>
-    ${compSummary.length ? `<div class="chart-wrap" style="height:${Math.max(320, compSummary.length * 34)}px;"><canvas id="bc2-${day}"></canvas></div>` : `<div class="empty-note">No practices match the current filters.</div>`}
+    ${compSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc2-${day}"></canvas></div>${revealBlock(`bc2-reveal-${day}`)}` : `<div class="empty-note">No practices match the current filters.</div>`}
   `;
   row1.appendChild(chart1Panel);
   row1.appendChild(chart2Panel);
   container.appendChild(row1);
 
-  const sustainedSummary = computeSustainedVerificationByPractice(records);
+  const verifSummary = computeContinuedUptakenVerificationByPractice(records);
   const notDoingSummary = computeNotDoingBreakdownByPractice(records);
   const row2 = document.createElement("div");
   row2.className = "two-col-even";
   const chart3Panel = document.createElement("div");
   chart3Panel.className = "panel";
   chart3Panel.innerHTML = `
-    <h2>Chart 3: Impact of Training - Continued</h2>
-    <div class="panel-sub">Farmers doing a practice at both baseline and endline (Sustained), split by whether the endline visit confirmed it in person (Confirmed) or the evidence was self-reported/unverified.</div>
-    ${sustainedSummary.length ? `<div class="chart-wrap" style="height:${Math.max(300, sustainedSummary.length * 34)}px;"><canvas id="bc3-${day}"></canvas></div>` : `<div class="empty-note">No sustained practices match the current filters.</div>`}
+    <h2>Chart 3: Impact of Training - Continued vs. Uptaken</h2>
+    <div class="panel-sub">Farmers doing a practice at endline - Continued (doing at baseline too) or Uptaken (new since training) - each split by whether the endline visit confirmed it in person (Confirmed) or the evidence was unverified.</div>
+    ${verifSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc3-${day}"></canvas></div>${revealBlock(`bc3-reveal-${day}`)}` : `<div class="empty-note">No records match the current filters.</div>`}
   `;
   const chart4Panel = document.createElement("div");
   chart4Panel.className = "panel";
   chart4Panel.innerHTML = `
     <h2>Chart 4: Not Doing Breakdown</h2>
     <div class="panel-sub">Farmers not doing a practice at endline (Discontinued or Never adopted), each split by whether they specifically attempted it but it failed.</div>
-    ${notDoingSummary.length ? `<div class="chart-wrap" style="height:${Math.max(300, notDoingSummary.length * 34)}px;"><canvas id="bc4-${day}"></canvas></div>` : `<div class="empty-note">No non-adopters match the current filters.</div>`}
+    ${notDoingSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc4-${day}"></canvas></div>${revealBlock(`bc4-reveal-${day}`)}` : `<div class="empty-note">No non-adopters match the current filters.</div>`}
   `;
   row2.appendChild(chart3Panel);
   row2.appendChild(chart4Panel);
@@ -1738,30 +1779,38 @@ function buildImportedBarChartsPanel(day, records) {
 
   setTimeout(() => {
     if (compSummary.length) {
-      renderStackedByPracticeChart(`bc1-${day}`, compSummary.map((s) => `${s.label} (n=${s.n})`), [
-        { label: "Never adopted", data: compSummary.map((s) => s.notPracticed), color: "#BBBBBB" },
-        { label: "Newly adopted", data: compSummary.map((s) => s.uptaken), color: COLORS.green },
-        { label: "Discontinued", data: compSummary.map((s) => s.notObserved), color: COLORS.ochre },
-        { label: "Sustained", data: compSummary.map((s) => s.sustained), color: COLORS.navy },
-      ]);
+      // Bottom-to-top stack order matches the source chart: Sustained,
+      // Uptaken, Discontinued, Never adopted.
+      renderStackedByPracticeChart(`bc1-${day}`, compSummary, [
+        { label: "Sustained", data: compSummary.map((s) => s.sustained), color: "#2E7D32" },
+        { label: "Newly adopted", data: compSummary.map((s) => s.uptaken), color: "#66BB6A" },
+        { label: "Discontinued", data: compSummary.map((s) => s.notObserved), color: "#C62828" },
+        { label: "Never adopted", data: compSummary.map((s) => s.notPracticed), color: "#B0BEC5" },
+      ], `bc1-reveal-${day}`);
       addChartDownloadButton(chart1Panel, `bc1-${day}`, `day${day}_transition_composition.png`);
-      renderUptakePercentChart(`bc2-${day}`, compSummary);
+      renderUptakePercentChart(`bc2-${day}`, compSummary, `bc2-reveal-${day}`);
       addChartDownloadButton(chart2Panel, `bc2-${day}`, `day${day}_uptake_percent.png`);
     }
-    if (sustainedSummary.length) {
-      renderStackedByPracticeChart(`bc3-${day}`, sustainedSummary.map((s) => `${s.label} (n=${s.confirmed + s.unverified})`), [
-        { label: "Unverified", data: sustainedSummary.map((s) => s.unverified), color: COLORS.navyDim },
-        { label: "Confirmed", data: sustainedSummary.map((s) => s.confirmed), color: COLORS.navy },
-      ]);
+    if (verifSummary.length) {
+      // Bottom-to-top: Continued-Confirmed, Continued-Unverified,
+      // Uptaken-Confirmed, Uptaken-Unverified - each pair deep-then-faded.
+      renderStackedByPracticeChart(`bc3-${day}`, verifSummary, [
+        { label: "Continued - Confirmed present", data: verifSummary.map((s) => s.continuedConfirmed), color: "#3A5480" },
+        { label: "Continued - Unverified", data: verifSummary.map((s) => s.continuedUnverified), color: "#7C93C9" },
+        { label: "Uptaken - Confirmed present", data: verifSummary.map((s) => s.uptakenConfirmed), color: "#2E7D32" },
+        { label: "Uptaken - Unverified", data: verifSummary.map((s) => s.uptakenUnverified), color: "#A5D6A7" },
+      ], `bc3-reveal-${day}`);
       addChartDownloadButton(chart3Panel, `bc3-${day}`, `day${day}_continued_verification.png`);
     }
     if (notDoingSummary.length) {
-      renderStackedByPracticeChart(`bc4-${day}`, notDoingSummary.map((s) => `${s.label} (n=${s.notObserved + s.notObservedFailed + s.notPracticed + s.notPracticedFailed})`), [
-        { label: "Not practiced before and after", data: notDoingSummary.map((s) => s.notPracticed), color: "#BBBBBB" },
-        { label: "Not practiced before and after (Attempted but failed)", data: notDoingSummary.map((s) => s.notPracticedFailed), color: COLORS.grayDim },
-        { label: "Practice not observed", data: notDoingSummary.map((s) => s.notObserved), color: COLORS.ochre },
-        { label: "Practice not observed (Attempted but failed)", data: notDoingSummary.map((s) => s.notObservedFailed), color: COLORS.ochreDim },
-      ]);
+      // Bottom-to-top: Practice not observed, its Attempted-but-failed
+      // slice, Not practiced before/after, its Attempted-but-failed slice.
+      renderStackedByPracticeChart(`bc4-${day}`, notDoingSummary, [
+        { label: "Practice not observed", data: notDoingSummary.map((s) => s.notObserved), color: "#C17B9E" },
+        { label: "Practice not observed (Attempted but failed)", data: notDoingSummary.map((s) => s.notObservedFailed), color: "#E3C0D3" },
+        { label: "Not practiced before and after", data: notDoingSummary.map((s) => s.notPracticed), color: "#5C6570" },
+        { label: "Not practiced before and after (Attempted but failed)", data: notDoingSummary.map((s) => s.notPracticedFailed), color: "#AEB4BB" },
+      ], `bc4-reveal-${day}`);
       addChartDownloadButton(chart4Panel, `bc4-${day}`, `day${day}_not_doing_breakdown.png`);
     }
   }, 0);
@@ -1821,7 +1870,7 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
     <h2>Practice Adoption: New vs Old Farmers</h2>
     <div class="panel-sub">
       New = 1.5 years or less with the organization, Old = more than 1.5 years (from Farmer_Membership records).
-      Reflects organization/county/name filters above, but ignores the Tenure filter since both groups are always shown here.
+      Reflects the organization/county/name/practice filters above, but ignores the Tenure filter since both groups are always shown here.
       ${unknownCount > 0 ? `${unknownCount} farmer(s) with unknown tenure are excluded from this chart.` : ""}
     </div>
     <div class="two-col-even">
