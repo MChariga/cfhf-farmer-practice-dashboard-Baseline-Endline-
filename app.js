@@ -13,8 +13,6 @@ const STATE = {
   charts: {},  // keyed by canvas id -> Chart.js instance, so we can destroy before redraw
   selectedReason: {}, // keyed by day number -> the reasonCategory currently drilled into on the treemap, or null
   namesUnlocked: false, // whether farmer names are shown in the clear or blurred; resets on page reload
-  notFoundTableOpen: {}, // keyed by day number -> whether the Farmers Not Found detail table is expanded
-  transitionFlowOpen: {}, // keyed by day number -> whether the Transition Category Breakdown's flow-diagram view is revealed
   openMultiSelect: null, // which multi-select filter dropdown (if any) is currently open, e.g. "organization"
   chartFocus: {}, // keyed by canvas id -> the category index currently focused (others dimmed), or null/undefined
 };
@@ -36,6 +34,12 @@ const COLORS = {
   // same, while still reading as visibly "less saturated" than "doing".
   notDoingNew: "#B7C9AE",
   notDoingOld: "#DDBFA0",
+  // Dimmed/lighter variants used for the imported Bar_Charts panel's
+  // "Unverified" and "Attempted but failed" sub-categories, so each stays
+  // visibly a paler variant of its own family's main color.
+  navyDim: "#8A96AC",
+  ochreDim: "#DCAF6B",
+  grayDim: "#D8D8D8",
 };
 
 function defaultFilters() {
@@ -330,6 +334,36 @@ function downloadJSON(obj, filename) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Every farmer name that appears anywhere in the dataset, mapped to a
+// stable "Farmer N" code (alphabetical order, so the same person gets the
+// same code in every export and across repeated downloads). Used to keep
+// real names out of every downloaded file - on-screen viewing (with the
+// name-lock unlocked) is unaffected; this only governs what leaves the
+// browser as a file.
+function buildGlobalAnonMap() {
+  const names = new Set();
+  DASHBOARD_DATA.records.forEach((r) => names.add(r.farmerName));
+  DASHBOARD_DATA.days.forEach((d) => d.farmers.forEach((p) => names.add(p.farmerName)));
+  const sorted = Array.from(names).sort();
+  const map = new Map();
+  sorted.forEach((n, i) => map.set(n, `Farmer ${i + 1}`));
+  return map;
+}
+
+function anonymizeName(anonMap, name) {
+  return anonMap.get(name) || "Farmer (unknown)";
+}
+
+// Deep-clones DASHBOARD_DATA and replaces every farmerName with its
+// anonymized code, for the raw "Full dataset (JSON)" download.
+function anonymizeFullDataset() {
+  const anonMap = buildGlobalAnonMap();
+  const clone = JSON.parse(JSON.stringify(DASHBOARD_DATA));
+  clone.records.forEach((r) => { if (r.farmerName) r.farmerName = anonymizeName(anonMap, r.farmerName); });
+  clone.days.forEach((d) => d.farmers.forEach((p) => { if (p.farmerName) p.farmerName = anonymizeName(anonMap, p.farmerName); }));
+  return clone;
 }
 
 function farmerSummaryRows() {
@@ -772,8 +806,70 @@ function buildOverviewView() {
   setTimeout(() => renderOverviewSampleChart(), 0);
 
   wrap.appendChild(buildOrgSummaryPanel());
+  wrap.appendChild(buildMissingFarmersPanel());
   wrap.appendChild(buildDownloadPanel());
   return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Missing Farmers (Overview tab) - one row per unique farmer (deduped by
+// Farmer_ID) who was surveyed at baseline but never found at endline on any
+// day, replacing the old per-day "Farmers Not Found at Endline" panels with
+// a single consolidated view.
+// ---------------------------------------------------------------------------
+function computeMissingFarmers() {
+  const byId = new Map();
+  DASHBOARD_DATA.days.forEach((day) => {
+    day.farmers.forEach((p) => {
+      if (p.atBaseline && !p.foundAtEndlineAnyDay && !byId.has(p.farmerId)) {
+        byId.set(p.farmerId, {
+          farmerName: p.farmerName,
+          organization: p.organization,
+          county: p.county,
+          reasonNotAssessed: p.reasonNotAssessed || "",
+        });
+      }
+    });
+  });
+  return Array.from(byId.values()).sort((a, b) => a.organization.localeCompare(b.organization) || a.farmerName.localeCompare(b.farmerName));
+}
+
+function buildMissingFarmersPanel() {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  const missing = computeMissingFarmers();
+  panel.innerHTML = `
+    <h2>Missing Farmers</h2>
+    <div class="panel-sub">Every unique farmer (deduped by Farmer_ID) surveyed at baseline but never found at endline, on any day. Reason comes from the MissingFarmers tracking sheet where available.</div>
+    ${missing.length ? `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Reason for Missing</th></tr></thead>
+          <tbody>
+            ${missing.map((p) => `
+              <tr><td>${farmerNameCell(p.farmerName)}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.reasonNotAssessed || "-"}</td></tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <span>${missing.length} farmer(s)</span>
+        <button class="btn" id="export-missing-farmers">Export list (CSV)</button>
+      </div>
+    ` : `<div class="empty-note">No farmers are missing at endline.</div>`}
+  `;
+  if (missing.length) {
+    panel.querySelector("#export-missing-farmers").addEventListener("click", () => {
+      const anonMap = buildGlobalAnonMap();
+      passwordGatedDownload(missing, [
+        { label: "Farmer", get: (p) => anonymizeName(anonMap, p.farmerName) },
+        { label: "Organization", get: (p) => p.organization },
+        { label: "County", get: (p) => p.county },
+        { label: "Reason for Missing", get: (p) => p.reasonNotAssessed || "" },
+      ], "missing_farmers.csv");
+    });
+  }
+  return panel;
 }
 
 // ---------------------------------------------------------------------------
@@ -866,11 +962,12 @@ function buildDownloadPanel() {
       `;
 
       btnsWrap.querySelector("#dl-all-records").addEventListener("click", () => {
+        const anonMap = buildGlobalAnonMap();
         downloadCSV(DASHBOARD_DATA.records, [
           { label: "Day", get: (r) => r.day },
           { label: "Question", get: (r) => r.question },
           { label: "Practice", get: (r) => r.shortLabel },
-          { label: "Farmer", get: (r) => r.farmerName },
+          { label: "Farmer", get: (r) => anonymizeName(anonMap, r.farmerName) },
           { label: "Organization", get: (r) => r.organization },
           { label: "County", get: (r) => r.county },
           { label: "Tenure", get: (r) => r.tenure },
@@ -881,8 +978,9 @@ function buildDownloadPanel() {
       });
 
       btnsWrap.querySelector("#dl-farmer-summary").addEventListener("click", () => {
+        const anonMap = buildGlobalAnonMap();
         downloadCSV(farmerSummaryRows(), [
-          { label: "Farmer", get: (r) => r.farmerName },
+          { label: "Farmer", get: (r) => anonymizeName(anonMap, r.farmerName) },
           { label: "Organization", get: (r) => r.organization },
           { label: "County", get: (r) => r.county },
           { label: "Tenure", get: (r) => r.tenure },
@@ -892,10 +990,11 @@ function buildDownloadPanel() {
 
       DASHBOARD_DATA.days.forEach((d) => {
         btnsWrap.querySelector(`#dl-day-${d.day}`).addEventListener("click", () => {
+          const anonMap = buildGlobalAnonMap();
           downloadCSV(recordsForDay(d.day), [
             { label: "Question", get: (r) => r.question },
             { label: "Practice", get: (r) => r.shortLabel },
-            { label: "Farmer", get: (r) => r.farmerName },
+            { label: "Farmer", get: (r) => anonymizeName(anonMap, r.farmerName) },
             { label: "Organization", get: (r) => r.organization },
             { label: "County", get: (r) => r.county },
             { label: "Tenure", get: (r) => r.tenure },
@@ -907,7 +1006,7 @@ function buildDownloadPanel() {
       });
 
       btnsWrap.querySelector("#dl-json").addEventListener("click", () => {
-        downloadJSON(DASHBOARD_DATA, "dashboard_data_full.json");
+        downloadJSON(anonymizeFullDataset(), "dashboard_data_full.json");
       });
     };
 
@@ -1076,20 +1175,17 @@ function buildDayView(day) {
     ${kpiCard("Total Surveyed at Baseline", filteredFarmers.length, "Number of farmers with full/partial data", "ochre")}
   `;
   wrap.appendChild(kpiRow);
-  wrap.appendChild(buildNotFoundPanel(day, notFoundFarmers));
 
   // coreFiltered narrowed down to whichever practices are currently
   // selected (or left as-is when "All" is selected) - this is what every
-  // "across every practice" panel below (uptake overview, transition
-  // breakdown, the All-Practices dumbbell/quadrant, the reasons treemap)
-  // actually renders, so picking two or more specific practices compares
-  // just those instead of every practice on the day.
+  // "across every practice" panel below (the All-Practices dumbbell/
+  // quadrant, the reasons treemap) actually renders, so picking two or
+  // more specific practices compares just those instead of every practice
+  // on the day.
   const practiceScopedFiltered = f.practice.includes("All") ? coreFiltered : coreFiltered.filter((r) => f.practice.includes(r.question));
   const practiceScopeLabel = isSinglePractice
     ? ((coreFiltered.find((r) => r.question === f.practice[0]) || {}).shortLabel || f.practice[0])
     : (f.practice.includes("All") ? "All Practices" : `${f.practice.length} selected practices`);
-
-  wrap.appendChild(buildUptakeOverviewPanel(day, practiceScopedFiltered));
 
   // --- Main content: All Practices vs single-practice drill-down. Only
   // exactly one specific practice gets the deep single-practice view
@@ -1107,151 +1203,6 @@ function buildDayView(day) {
   wrap.appendChild(buildAdvancedViewsPanel(day, practiceScopedFiltered, orgCountyNameFiltered, f, nEndlineFiltered, isSinglePractice, practiceScopeLabel));
 
   return wrap;
-}
-
-// ---------------------------------------------------------------------------
-// Farmer detail: who was surveyed at baseline but not found at endline
-// (reflects the organization/county/name/tenure filters above).
-// ---------------------------------------------------------------------------
-// Buckets the free-text "Reason Not Assessed" values from MissingFarmers
-// into a handful of readable groups for the summary chart - the raw sheet
-// has ~50 near-duplicate phrasings (typos, minor wording differences) for
-// what are really a dozen or so underlying situations. Keyword match, first
-// bucket that matches wins; anything unmatched falls into "Other".
-function categorizeNotFoundReason(text) {
-  if (!text) return "No reason recorded";
-  const t = text.toLowerCase();
-  const buckets = [
-    ["Not documented", ["not documented"]],
-    ["Tracked via group record only", ["smart point", "cbo", "work in group"]],
-    ["Not visited", ["not visited"]],
-    ["Not at home / unreachable", ["not at home", "unreachable", "unrechable", "no phone", "hardly be found", "hardly"]],
-    ["Unavailable for follow-up", ["not available", "no time", "other engagements"]],
-    ["Returned to school/college", ["school", "college", "collage", "university", "polytechnic", "student"]],
-    ["Health / bereavement", ["sick", "hospital", "surgery", "burial"]],
-    ["Family issue", ["family conflic", "family conflit", "separated"]],
-    ["Record/identity mix-up", ["same homestead"]],
-    ["Moved / working elsewhere", ["job", "work", "nairobi", "moved", "mining", "extension officer", "workshop", "training", "meeting", "sugar company"]],
-  ];
-  for (const [label, keywords] of buckets) {
-    if (keywords.some((kw) => t.includes(kw))) return label;
-  }
-  return "Other / uncategorized";
-}
-
-function countNotFoundCategories(sorted) {
-  const set = new Set(sorted.map((p) => categorizeNotFoundReason(p.reasonNotAssessed)));
-  return set.size;
-}
-
-function renderNotFoundReasonChart(canvasId, sorted, day) {
-  destroyChart(canvasId);
-  const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-
-  const counts = new Map();
-  sorted.forEach((p) => {
-    const label = categorizeNotFoundReason(p.reasonNotAssessed);
-    counts.set(label, (counts.get(label) || 0) + 1);
-  });
-  const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-
-  STATE.charts[canvasId] = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: entries.map(([label]) => label),
-      datasets: [{
-        label: "Farmers",
-        data: entries.map(([, n]) => n),
-        backgroundColor: entries.map(([label]) => (label === "No reason recorded" ? COLORS.line : COLORS.rust)),
-      }],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      onClick: () => {
-        STATE.notFoundTableOpen[day] = true;
-        renderMain();
-      },
-      onHover: (evt, elements) => {
-        evt.native.target.style.cursor = elements.length ? "pointer" : "default";
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (c) => {
-              const pct = sorted.length ? ((c.raw / sorted.length) * 100).toFixed(1) : "0.0";
-              return `${c.raw} farmer(s) - this is ${pct}% of farmers not reached - click to view the full list below`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: { min: 0, title: { display: true, text: "Number of farmers" } },
-      },
-    },
-  });
-}
-
-function buildNotFoundPanel(day, notFoundFarmers) {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-  const sorted = [...notFoundFarmers].sort((a, b) => a.farmerName.localeCompare(b.farmerName));
-  const tableOpen = !!STATE.notFoundTableOpen[day];
-  const chartHeight = Math.max(160, countNotFoundCategories(sorted) * 34);
-
-  panel.innerHTML = `
-    <h2>Farmers Not Found at Endline</h2>
-    <div class="panel-sub">Surveyed at baseline but not reached at endline for this day. Reflects the organization/county/name/tenure filters above. Reason not assessed comes from the MissingFarmers tracking sheet and is grouped into broad categories below for readability (a handful of farmers have no reason recorded there).</div>
-    ${sorted.length ? `
-      <div class="chart-wrap" style="height:${chartHeight}px;"><canvas id="notfound-reason-chart-${day}"></canvas></div>
-      <div class="panel-sub" style="margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <span>Click a bar to view the full farmer-level list (with their exact, un-grouped reason).</span>
-        <button class="btn" id="toggle-notfound-table-${day}">${tableOpen ? "Hide" : "Show"} farmer list</button>
-      </div>
-      ${tableOpen ? `
-        <div class="table-scroll" style="margin-top:10px;">
-          <table class="data-table">
-            <thead><tr><th>Farmer</th><th>Organization</th><th>County</th><th>Tenure</th><th>Reason not assessed</th></tr></thead>
-            <tbody>
-              ${sorted.map((p) => `
-                <tr><td>${farmerNameCell(p.farmerName)}</td><td>${p.organization}</td><td>${p.county}</td><td>${p.tenure}</td><td>${p.reasonNotAssessed || "-"}</td></tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-        <div class="table-footer">
-          <span>${sorted.length} farmer(s)</span>
-          <button class="btn" id="export-notfound-${day}">Export list (CSV)</button>
-        </div>
-      ` : ""}
-    ` : `<div class="empty-note">No farmers match the current filters, or every filtered farmer was found at endline.</div>`}
-  `;
-
-  if (sorted.length) {
-    setTimeout(() => {
-      renderNotFoundReasonChart(`notfound-reason-chart-${day}`, sorted, day);
-      addChartDownloadButton(panel, `notfound-reason-chart-${day}`, `day${day}_not_found_reasons.png`);
-    }, 0);
-    panel.querySelector(`#toggle-notfound-table-${day}`).addEventListener("click", () => {
-      STATE.notFoundTableOpen[day] = !tableOpen;
-      renderMain();
-    });
-    if (tableOpen) {
-      panel.querySelector(`#export-notfound-${day}`).addEventListener("click", () => {
-        passwordGatedDownload(sorted, [
-          { label: "Farmer", get: (p) => p.farmerName },
-          { label: "Organization", get: (p) => p.organization },
-          { label: "County", get: (p) => p.county },
-          { label: "Tenure", get: (p) => p.tenure },
-          { label: "Reason not assessed", get: (p) => p.reasonNotAssessed || "" },
-        ], `day${day}_not_found_at_endline.csv`);
-      });
-    }
-  }
-  return panel;
 }
 
 function buildAllPracticesPanel(day, records) {
@@ -1548,8 +1499,9 @@ function buildFarmerTable(day, records, f) {
       });
     });
     wrap.querySelector(`#export-${day}`).addEventListener("click", () => {
+      const anonMap = buildGlobalAnonMap();
       passwordGatedDownload(sorted, [
-        { label: "Farmer", get: (r) => r.farmerName },
+        { label: "Farmer", get: (r) => anonymizeName(anonMap, r.farmerName) },
         { label: "Organization", get: (r) => r.organization },
         { label: "County", get: (r) => r.county },
         { label: "Practice", get: (r) => r.shortLabel },
@@ -1579,50 +1531,242 @@ function computeTransitionsJS(records) {
   return { stayedNotDoing, stopped, started, stayedDoing };
 }
 
-// Same four categories as computeTransitionsJS, but broken out per practice
-// instead of aggregated into one total - one entry per question, each with
-// its own four counts, sorted by "doing at endline" (started+stayedDoing)
-// descending so the practices with the strongest uptake lead.
-function computeTransitionsByPractice(records) {
+// ---------------------------------------------------------------------------
+// Imported from each Day_*.xlsx's own "Bar_Charts" sheet (pasted-in static
+// images there, not live data) - reconstructed here from the same
+// underlying fields so they're live, filterable, and downloadable instead
+// of a picture. Cross-checked against the source workbook's own
+// Question_Uptake/Reason_Breakdown tables before building these.
+//
+// transitionDetail (captured in build_dashboard_data.py for every row, not
+// just non-adopters) is the raw "<Transition Type> - <specific reason>"
+// string from the source Category/Reason_Category column, e.g. "Sustained
+// - Practice confirmed present" or "Never adopted - Knowledge/skill gap -
+// forgot, misunderstood, or missed training". Transition Type is always one
+// of Sustained (baseline&endline both Doing) / Newly adopted (baseline Not
+// doing, endline Doing) / Discontinued (baseline Doing, endline Not doing)
+// / Never adopted (baseline&endline both Not doing) - so it's derived
+// directly from baseline/endline rather than by parsing the text, and only
+// the text after the dash (Confirmed vs Unverified, or Attempted-but-failed
+// or not) is read from transitionDetail.
+// ---------------------------------------------------------------------------
+
+// Chart 1 (composition, stacked counts) and Chart 2 (% uptake at endline)
+// share this one per-practice summary - both should show practices in the
+// same order since they sit side by side.
+function computeUptakeCompositionByPractice(records) {
   const byQ = new Map();
   records.forEach((r) => {
-    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, stayedNotDoing: 0, started: 0, stopped: 0, stayedDoing: 0 });
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, sustained: 0, uptaken: 0, notObserved: 0, notPracticed: 0, n: 0 });
     const b = byQ.get(r.question);
-    if (r.baseline === 0 && r.endline === 0) b.stayedNotDoing++;
-    else if (r.baseline === 1 && r.endline === 0) b.stopped++;
-    else if (r.baseline === 0 && r.endline === 1) b.started++;
-    else if (r.baseline === 1 && r.endline === 1) b.stayedDoing++;
+    b.n++;
+    if (r.baseline === 1 && r.endline === 1) b.sustained++;
+    else if (r.baseline === 0 && r.endline === 1) b.uptaken++;
+    else if (r.baseline === 1 && r.endline === 0) b.notObserved++;
+    else b.notPracticed++;
   });
-  return Array.from(byQ.values()).sort((a, b) => (b.started + b.stayedDoing) - (a.started + a.stayedDoing));
+  return Array.from(byQ.values())
+    .map((b) => ({ ...b, pctUptake: b.n ? (100 * (b.sustained + b.uptaken) / b.n) : 0 }))
+    .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
 }
 
-// Practice uptake overview: one lollipop-style chart, one practice per x
-// position, three series grouped together per practice - scoped to
-// whichever practices are currently selected (all, one, or several).
-// Overall uptake at endline (continued-doing + newly-started combined)
-// sits alongside just the newly-started slice of that total and the
-// continued-from-baseline slice, so it's easy to see how much of each
-// practice's endline total is genuinely new versus carried over.
-function buildUptakeOverviewPanel(day, records) {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-  const uptakeSummary = [...summarizeByPractice(records)].sort((a, b) => b.endCount - a.endCount);
-  panel.innerHTML = `
-    <h2>Practice Uptake Overview</h2>
-    <div class="panel-sub">Reflects the organization/county/name/tenure/practice filters above. "Overall uptake" is everyone doing the practice at endline (continued + newly started); "Newly uptaken" is just the new-adopter slice of that total; "Continued" is farmers who were already doing it at baseline and still were at endline. n = total farmers who answered that question. Click a bar to focus on just that practice and dim the rest; click again to clear.</div>
-    ${uptakeSummary.length ? `<div class="chart-wrap" style="height:${Math.max(320, uptakeSummary.length * 42)}px;"><canvas id="uptake-overview-${day}"></canvas></div>` : `<div class="empty-note">No practices match the current filters.</div>`}
+// Chart 3: farmers Sustained (baseline & endline both Doing) split by
+// whether the visit confirmed the practice in person or it was unverified
+// (self-reported, group-only, or a previously-lapsed-then-resumed case).
+function computeSustainedVerificationByPractice(records) {
+  const byQ = new Map();
+  records.forEach((r) => {
+    if (!(r.baseline === 1 && r.endline === 1)) return;
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, confirmed: 0, unverified: 0 });
+    const b = byQ.get(r.question);
+    const d = r.transitionDetail || "";
+    if (d === "Sustained - Practice confirmed present") b.confirmed++;
+    else b.unverified++;
+  });
+  return Array.from(byQ.values())
+    .filter((b) => b.confirmed + b.unverified > 0)
+    .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
+}
+
+// Chart 4: farmers Not Doing at endline (Discontinued or Never adopted),
+// split into 4 - each of the two transition types further split by whether
+// the specific reason was "Attempted but failed" or not.
+function computeNotDoingBreakdownByPractice(records) {
+  const byQ = new Map();
+  records.forEach((r) => {
+    const isDiscontinued = r.baseline === 1 && r.endline === 0;
+    const isNeverAdopted = r.baseline === 0 && r.endline === 0;
+    if (!isDiscontinued && !isNeverAdopted) return;
+    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, notObserved: 0, notObservedFailed: 0, notPracticed: 0, notPracticedFailed: 0 });
+    const b = byQ.get(r.question);
+    const attemptedFailed = (r.transitionDetail || "").toLowerCase().includes("attempted but failed");
+    if (isDiscontinued) {
+      if (attemptedFailed) b.notObservedFailed++; else b.notObserved++;
+    } else {
+      if (attemptedFailed) b.notPracticedFailed++; else b.notPracticed++;
+    }
+  });
+  return Array.from(byQ.values())
+    .filter((b) => b.notObserved + b.notObservedFailed + b.notPracticed + b.notPracticedFailed > 0)
+    .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
+}
+
+// Shared renderer for Chart 1, 3 and 4 - all are "N series stacked
+// horizontal bar per practice", just with different series/colors.
+function renderStackedByPracticeChart(canvasId, labels, series) {
+  destroyChart(canvasId);
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  const chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: series.map((s) => ({ label: s.label, data: s.data, backgroundColor: s.color })),
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      categoryPercentage: 0.72,
+      barPercentage: 0.92,
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10.5 } } },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const total = series.reduce((a, s) => a + s.data[c.dataIndex], 0);
+              return `${c.dataset.label}: ${c.raw} of ${total} (${total ? ((c.raw / total) * 100).toFixed(1) : "0.0"}%)`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
+        y: { stacked: true, ticks: { font: { size: 11 } } },
+      },
+    },
+  });
+  STATE.charts[canvasId] = chart;
+  wireBarFocusClick(chart, canvasId);
+}
+
+// Chart 2: single-series horizontal bar of % doing at endline per practice.
+function renderUptakePercentChart(canvasId, summary) {
+  destroyChart(canvasId);
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  const chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: summary.map((s) => `${s.label} (n=${s.n})`),
+      datasets: [{ label: "Uptake at endline", data: summary.map((s) => s.pctUptake), backgroundColor: COLORS.ochre, maxBarThickness: 22 }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      categoryPercentage: 0.72,
+      barPercentage: 0.92,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const s = summary[c.dataIndex];
+              return `${c.raw.toFixed(1)}% doing at endline (${s.sustained + s.uptaken} of ${s.n})`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { min: 0, max: 100, title: { display: true, text: "% doing at endline" } },
+        y: { ticks: { font: { size: 11 } } },
+      },
+    },
+  });
+  STATE.charts[canvasId] = chart;
+  wireBarFocusClick(chart, canvasId);
+}
+
+// Builds the whole imported-from-Excel panel: Chart 1 + Chart 2 side by
+// side, Chart 3 + Chart 4 side by side below.
+function buildImportedBarChartsPanel(day, records) {
+  const container = document.createElement("div");
+
+  const compSummary = computeUptakeCompositionByPractice(records);
+  const row1 = document.createElement("div");
+  row1.className = "two-col-even";
+  const chart1Panel = document.createElement("div");
+  chart1Panel.className = "panel";
+  chart1Panel.innerHTML = `
+    <h2>Chart 1: Transition Composition per Practice</h2>
+    <div class="panel-sub">Sustained (doing at both baseline and endline), Newly adopted, Discontinued, and Never adopted, per practice. Reflects the filters above. Click a bar to focus on just that practice and dim the rest.</div>
+    ${compSummary.length ? `<div class="chart-wrap" style="height:${Math.max(320, compSummary.length * 34)}px;"><canvas id="bc1-${day}"></canvas></div>` : `<div class="empty-note">No practices match the current filters.</div>`}
   `;
-  if (uptakeSummary.length) {
-    setTimeout(() => {
-      renderLollipopChart(`uptake-overview-${day}`, uptakeSummary.map((s) => `${s.label} (n=${s.n})`), [
-        { label: "Overall uptake at endline", data: uptakeSummary.map((s) => s.endCount), color: COLORS.ochre },
-        { label: "Newly uptaken after training", data: uptakeSummary.map((s) => s.started), color: COLORS.green },
-        { label: "Continued from baseline", data: uptakeSummary.map((s) => s.endCount - s.started), color: COLORS.navy },
+  const chart2Panel = document.createElement("div");
+  chart2Panel.className = "panel";
+  chart2Panel.innerHTML = `
+    <h2>Chart 2: Overall Uptake % per Practice</h2>
+    <div class="panel-sub">Share of farmers doing the practice at endline (Sustained + Newly adopted), per practice. Same practice order as Chart 1.</div>
+    ${compSummary.length ? `<div class="chart-wrap" style="height:${Math.max(320, compSummary.length * 34)}px;"><canvas id="bc2-${day}"></canvas></div>` : `<div class="empty-note">No practices match the current filters.</div>`}
+  `;
+  row1.appendChild(chart1Panel);
+  row1.appendChild(chart2Panel);
+  container.appendChild(row1);
+
+  const sustainedSummary = computeSustainedVerificationByPractice(records);
+  const notDoingSummary = computeNotDoingBreakdownByPractice(records);
+  const row2 = document.createElement("div");
+  row2.className = "two-col-even";
+  const chart3Panel = document.createElement("div");
+  chart3Panel.className = "panel";
+  chart3Panel.innerHTML = `
+    <h2>Chart 3: Impact of Training - Continued</h2>
+    <div class="panel-sub">Farmers doing a practice at both baseline and endline (Sustained), split by whether the endline visit confirmed it in person (Confirmed) or the evidence was self-reported/unverified.</div>
+    ${sustainedSummary.length ? `<div class="chart-wrap" style="height:${Math.max(300, sustainedSummary.length * 34)}px;"><canvas id="bc3-${day}"></canvas></div>` : `<div class="empty-note">No sustained practices match the current filters.</div>`}
+  `;
+  const chart4Panel = document.createElement("div");
+  chart4Panel.className = "panel";
+  chart4Panel.innerHTML = `
+    <h2>Chart 4: Not Doing Breakdown</h2>
+    <div class="panel-sub">Farmers not doing a practice at endline (Discontinued or Never adopted), each split by whether they specifically attempted it but it failed.</div>
+    ${notDoingSummary.length ? `<div class="chart-wrap" style="height:${Math.max(300, notDoingSummary.length * 34)}px;"><canvas id="bc4-${day}"></canvas></div>` : `<div class="empty-note">No non-adopters match the current filters.</div>`}
+  `;
+  row2.appendChild(chart3Panel);
+  row2.appendChild(chart4Panel);
+  container.appendChild(row2);
+
+  setTimeout(() => {
+    if (compSummary.length) {
+      renderStackedByPracticeChart(`bc1-${day}`, compSummary.map((s) => `${s.label} (n=${s.n})`), [
+        { label: "Never adopted", data: compSummary.map((s) => s.notPracticed), color: "#BBBBBB" },
+        { label: "Newly adopted", data: compSummary.map((s) => s.uptaken), color: COLORS.green },
+        { label: "Discontinued", data: compSummary.map((s) => s.notObserved), color: COLORS.ochre },
+        { label: "Sustained", data: compSummary.map((s) => s.sustained), color: COLORS.navy },
       ]);
-      addChartDownloadButton(panel, `uptake-overview-${day}`, `day${day}_practice_uptake_overview.png`);
-    }, 0);
-  }
-  return panel;
+      addChartDownloadButton(chart1Panel, `bc1-${day}`, `day${day}_transition_composition.png`);
+      renderUptakePercentChart(`bc2-${day}`, compSummary);
+      addChartDownloadButton(chart2Panel, `bc2-${day}`, `day${day}_uptake_percent.png`);
+    }
+    if (sustainedSummary.length) {
+      renderStackedByPracticeChart(`bc3-${day}`, sustainedSummary.map((s) => `${s.label} (n=${s.confirmed + s.unverified})`), [
+        { label: "Unverified", data: sustainedSummary.map((s) => s.unverified), color: COLORS.navyDim },
+        { label: "Confirmed", data: sustainedSummary.map((s) => s.confirmed), color: COLORS.navy },
+      ]);
+      addChartDownloadButton(chart3Panel, `bc3-${day}`, `day${day}_continued_verification.png`);
+    }
+    if (notDoingSummary.length) {
+      renderStackedByPracticeChart(`bc4-${day}`, notDoingSummary.map((s) => `${s.label} (n=${s.notObserved + s.notObservedFailed + s.notPracticed + s.notPracticedFailed})`), [
+        { label: "Not practiced before and after", data: notDoingSummary.map((s) => s.notPracticed), color: "#BBBBBB" },
+        { label: "Not practiced before and after (Attempted but failed)", data: notDoingSummary.map((s) => s.notPracticedFailed), color: COLORS.grayDim },
+        { label: "Practice not observed", data: notDoingSummary.map((s) => s.notObserved), color: COLORS.ochre },
+        { label: "Practice not observed (Attempted but failed)", data: notDoingSummary.map((s) => s.notObservedFailed), color: COLORS.ochreDim },
+      ]);
+      addChartDownloadButton(chart4Panel, `bc4-${day}`, `day${day}_not_doing_breakdown.png`);
+    }
+  }, 0);
+
+  return container;
 }
 
 function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nEndlineFiltered, isSinglePractice, practiceScopeLabel) {
@@ -1648,46 +1792,23 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
     ? `Showing the practice with the largest baseline-to-endline change${featuredPractice ? ` (${featuredPractice.change >= 0 ? "+" : ""}${featuredPractice.change.toFixed(1)}pp)` : ""} among the practices currently in scope. Reflects the organization/county/name/tenure/practice filters above.`
     : "Reflects the organization/county/name/tenure filters above.";
 
-  // Minimalist by default: only the per-practice stacked bar shows, with a
-  // one-line invitation to reveal the flow diagram below it instead of
-  // always showing both side by side.
-  const transitionByPractice = computeTransitionsByPractice(coreFiltered);
-  const flowOpen = !!STATE.transitionFlowOpen[day];
-  const stackPanel = document.createElement("div");
-  stackPanel.className = "panel";
-  stackPanel.innerHTML = `
-    <h2>Transition Category Breakdown</h2>
-    <div class="panel-sub">Same four categories as the flow diagram - stayed not doing, started, stopped, stayed doing - one stacked bar per practice, scoped to whichever practices are selected above. n = total farmers who answered that question. Click a bar to focus on just that practice and dim the rest; click again to clear.</div>
-    <div class="chart-wrap" style="height:${Math.max(320, transitionByPractice.length * 34)}px;"><canvas id="transition-stack-${day}"></canvas></div>
-    <div class="panel-sub" style="margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-      <span>Want to see this as a flow diagram instead? Click here.</span>
-      <button class="btn" id="toggle-flow-${day}">${flowOpen ? "Hide" : "Show"} flow diagram</button>
-    </div>
-    ${flowOpen ? `
-      <div class="panel" id="alluvial-panel-${day}" style="margin-top:14px; border:1px solid var(--line);">
-        <h2>Farmer Transitions: ${alluvialTitle}</h2>
-        <div class="panel-sub">${alluvialNote}</div>
-        <div id="alluvial-${day}" style="min-height:300px;"></div>
-      </div>
-    ` : ""}
+  const alluvialPanel = document.createElement("div");
+  alluvialPanel.className = "panel";
+  alluvialPanel.innerHTML = `
+    <h2>Farmer Transitions: ${alluvialTitle}</h2>
+    <div class="panel-sub">${alluvialNote}</div>
+    <div id="alluvial-${day}" style="min-height:300px;"></div>
   `;
-  container.appendChild(stackPanel);
+  container.appendChild(alluvialPanel);
   setTimeout(() => {
-    renderTransitionStackChart(`transition-stack-${day}`, transitionByPractice);
-    addChartDownloadButton(stackPanel, `transition-stack-${day}`, `day${day}_transition_category_breakdown.png`);
-    if (flowOpen) {
-      renderAlluvialSVG(`alluvial-${day}`, transitionCounts);
-      const alluvialPanelEl = stackPanel.querySelector(`#alluvial-panel-${day}`);
-      addSVGDownloadButton(alluvialPanelEl, () => {
-        const svg = document.querySelector(`#alluvial-${day} svg`);
-        return svg ? svg.outerHTML : null;
-      }, `day${day}_farmer_transitions_flow.svg`);
-    }
+    renderAlluvialSVG(`alluvial-${day}`, transitionCounts);
+    addSVGDownloadButton(alluvialPanel, () => {
+      const svg = document.querySelector(`#alluvial-${day} svg`);
+      return svg ? svg.outerHTML : null;
+    }, `day${day}_farmer_transitions_flow.svg`);
   }, 0);
-  stackPanel.querySelector(`#toggle-flow-${day}`).addEventListener("click", () => {
-    STATE.transitionFlowOpen[day] = !flowOpen;
-    renderMain();
-  });
+
+  container.appendChild(buildImportedBarChartsPanel(day, coreFiltered));
 
   // --- New vs Old tenure comparison, baseline and endline shown as two
   // side-by-side charts instead of one combined stacked chart. ---
@@ -1803,102 +1924,6 @@ function summarizeByPracticeAndTenure(records) {
 // period is "Baseline" or "Endline" - each call renders just that one
 // round's New-vs-Old bars, so the two rounds can sit side by side as two
 // separate charts instead of one chart with both rounds stacked together.
-// One stacked bar per practice (vertical - categories along the bottom,
-// counts going up), each split into the same four categories/colors as the
-// alluvial's ribbons and legend, so the two panels read as one connected
-// view of the same data.
-function renderTransitionStackChart(canvasId, summary) {
-  destroyChart(canvasId);
-  const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-
-  const chart = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: summary.map((s) => `${s.label} (n=${s.stayedNotDoing + s.started + s.stopped + s.stayedDoing})`),
-      datasets: [
-        { label: "Stayed not doing", data: summary.map((s) => s.stayedNotDoing), backgroundColor: "#BBBBBB" },
-        { label: "Started doing", data: summary.map((s) => s.started), backgroundColor: COLORS.green },
-        { label: "Stopped doing", data: summary.map((s) => s.stopped), backgroundColor: COLORS.ochre },
-        { label: "Stayed doing", data: summary.map((s) => s.stayedDoing), backgroundColor: COLORS.navy },
-      ],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      categoryPercentage: 0.72,
-      barPercentage: 0.92,
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (c) => {
-              const total = summary[c.dataIndex].stayedNotDoing + summary[c.dataIndex].started + summary[c.dataIndex].stopped + summary[c.dataIndex].stayedDoing;
-              return `${c.dataset.label}: ${c.raw} of n=${total} (${total ? ((c.raw / total) * 100).toFixed(1) : "0.0"}%)`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
-        y: { stacked: true, ticks: { font: { size: 11 } } },
-      },
-    },
-  });
-  STATE.charts[canvasId] = chart;
-  wireBarFocusClick(chart, canvasId);
-}
-
-// Grouped, thin, rounded-cap bars standing in for a "lollipop": several
-// series per category, side by side, drawn horizontally so many categories
-// stack down the page at a fixed row height instead of needing ever more
-// width per category. A true dot-on-a-stem needs a second point dataset
-// that Chart.js won't auto-offset to match grouped bars, so instead each
-// bar's end is rounded almost to a full circle - at this thinness it reads
-// as a lollipop head without the alignment problems of overlaying a
-// separate point dataset.
-function renderLollipopChart(canvasId, labels, series) {
-  destroyChart(canvasId);
-  const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-
-  const chart = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: series.map((s) => ({
-        label: s.label,
-        data: s.data,
-        backgroundColor: s.color,
-        maxBarThickness: 20,
-        borderRadius: 100,
-        categoryPercentage: 0.8,
-        barPercentage: 0.88,
-      })),
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (c) => `${c.dataset.label}: ${c.raw} farmer(s)`,
-          },
-        },
-      },
-      scales: {
-        x: { min: 0, title: { display: true, text: "Number of farmers" } },
-        y: { ticks: { font: { size: 11 } } },
-      },
-    },
-  });
-  STATE.charts[canvasId] = chart;
-  wireBarFocusClick(chart, canvasId);
-}
-
 function renderTenureComparisonChart(canvasId, summary, period) {
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
@@ -2237,8 +2262,9 @@ function renderReasonDrilldown(containerId, nonAdoptionRecords, selectedReason, 
   });
   if (rows.length) {
     el.querySelector(`#export-drill-${day}`).addEventListener("click", () => {
+      const anonMap = buildGlobalAnonMap();
       passwordGatedDownload(rows, [
-        { label: "Farmer", get: (r) => r.farmerName },
+        { label: "Farmer", get: (r) => anonymizeName(anonMap, r.farmerName) },
         { label: "Organization", get: (r) => r.organization },
         { label: "County", get: (r) => r.county },
         { label: "Tenure", get: (r) => r.tenure },

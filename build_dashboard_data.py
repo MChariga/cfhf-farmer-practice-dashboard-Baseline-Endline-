@@ -498,6 +498,24 @@ def build_day(day_num, label_lookup, tenure_lookup):
             if reason_str and reason_str.lower() not in ("nan", "none"):
                 reason = reason_str
 
+        # transitionDetail is the SAME raw column as reasonCategory above,
+        # but captured for every row regardless of baseline/endline - it's
+        # what feeds the Bar_Charts sheet's Chart 1/2/3/4 (Transition
+        # composition, Uptake %, Continued Confirmed-vs-Unverified, Not
+        # Doing breakdown). Values look like "Sustained - Practice
+        # confirmed present" or "Never adopted - Knowledge/skill gap - ...":
+        # a "<Transition Type> - <specific reason>" string, where Transition
+        # Type is one of Sustained/Newly adopted/Discontinued/Never adopted.
+        # For Sustained/Newly adopted rows specifically, the detail after
+        # the dash is either "Practice confirmed present" or one of several
+        # "Unverified (...)" variants - that Confirmed-vs-Unverified split
+        # is exactly what Chart 3 visualizes.
+        transition_detail = None
+        if reason_val is not None and not (isinstance(reason_val, float) and np.isnan(reason_val)):
+            detail_str = str(reason_val).strip()
+            if detail_str and detail_str.lower() not in ("nan", "none"):
+                transition_detail = detail_str
+
         # Narrative is a free-text field the enumerator wrote for this
         # farmer/question, independent of the coded Reason_Category theme -
         # captured for every row (not just non-adopters) so the
@@ -532,6 +550,7 @@ def build_day(day_num, label_lookup, tenure_lookup):
             "baseline": base,
             "endline": end,
             "reasonCategory": reason,
+            "transitionDetail": transition_detail,
             "narrative": narrative,
         })
 
