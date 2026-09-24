@@ -375,6 +375,111 @@ function farmerSummaryRows() {
   return Array.from(map.values()).map((v) => ({ ...v, days: Array.from(v.days).sort((a, b) => a - b).join("; ") }));
 }
 
+// ---------------------------------------------------------------------------
+// Responsive helpers
+// ---------------------------------------------------------------------------
+// Breakpoints mirror the CSS media queries in index.html.
+function viewportSize() {
+  const w = window.innerWidth;
+  if (w <= 700) return "phone";
+  if (w <= 1024) return "tablet";
+  return "desktop";
+}
+function isPhone() { return viewportSize() === "phone"; }
+
+// Splits a long label into several short lines (Chart.js draws array labels
+// as multi-line text) so long practice/reason names don't squeeze the plot
+// area on a narrow screen. Only used on phones.
+function wrapLabel(text, maxChars) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = "";
+  words.forEach((w) => {
+    if ((line + " " + w).trim().length > maxChars && line) { lines.push(line); line = w; }
+    else line = (line + " " + w).trim();
+  });
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+// Smaller default chart text on phones. Called at the start of every render.
+function applyChartDefaults() {
+  if (typeof Chart === "undefined") return;
+  Chart.defaults.font.size = isPhone() ? 10 : 12;
+  // Text and grid lines follow the light/dark theme.
+  Chart.defaults.color = isDark() ? "#C9D3C6" : "#666666";
+  Chart.defaults.borderColor = isDark() ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)";
+}
+
+// ---------------------------------------------------------------------------
+// Light / dark theme helpers
+// ---------------------------------------------------------------------------
+function isDark() {
+  return document.documentElement.getAttribute("data-theme") === "dark";
+}
+function themed(light, dark) {
+  return isDark() ? dark : light;
+}
+// Brighter versions of the brand colors for use on the dark background.
+function themedColors() {
+  return {
+    green: themed(COLORS.green, "#6FBF7E"),
+    rust: themed(COLORS.rust, "#E08A67"),
+    navy: themed(COLORS.navy, "#7F9CCB"),
+  };
+}
+
+// Exports a chart as PNG on a solid background matching the current theme
+// (the canvas itself is transparent, which would leave light text on
+// nothing when the image is opened in a white viewer).
+function chartToPNG(chart) {
+  const src = chart.canvas;
+  const out = document.createElement("canvas");
+  out.width = src.width;
+  out.height = src.height;
+  const g = out.getContext("2d");
+  g.fillStyle = isDark() ? "#1C241E" : "#FFFFFF";
+  g.fillRect(0, 0, out.width, out.height);
+  g.drawImage(src, 0, 0);
+  return out.toDataURL("image/png");
+}
+
+function setTheme(theme, persist) {
+  const dark = theme === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  if (persist) { try { localStorage.setItem("dashboardTheme", dark ? "dark" : "light"); } catch (_) {} }
+  const btn = document.getElementById("themeToggle");
+  if (btn) {
+    btn.setAttribute("aria-pressed", String(dark));
+    btn.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
+    btn.title = dark ? "Switch to light mode" : "Switch to dark mode";
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", dark ? "#141A15" : "#F2EFDE");
+}
+
+function initThemeToggle() {
+  setTheme(isDark() ? "dark" : "light", false);
+  const btn = document.getElementById("themeToggle");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      setTheme(isDark() ? "light" : "dark", true);
+      renderMain(); // charts are canvas-drawn, so redraw them in the new colors
+    });
+  }
+  // If the visitor never picked a theme, follow their device setting live.
+  if (window.matchMedia) {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e) => {
+      let saved = null;
+      try { saved = localStorage.getItem("dashboardTheme"); } catch (_) {}
+      if (!saved) { setTheme(e.matches ? "dark" : "light", false); renderMain(); }
+    };
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
+}
+
 function destroyChart(id) {
   if (STATE.charts[id]) {
     STATE.charts[id].destroy();
@@ -454,7 +559,7 @@ function addChartDownloadButton(panel, canvasId, filename) {
     const chart = STATE.charts[canvasId];
     if (!chart) return;
     const a = document.createElement("a");
-    a.href = chart.toBase64Image("image/png", 1);
+    a.href = chartToPNG(chart);
     a.download = filename;
     a.click();
   });
@@ -506,10 +611,12 @@ function renderTabs() {
       renderMain();
     });
     nav.appendChild(btn);
+    if (t.id === STATE.activeTab) requestAnimationFrame(() => btn.scrollIntoView({ inline: "center", block: "nearest" }));
   });
 }
 
 function renderMain() {
+  applyChartDefaults();
   const main = document.getElementById("mainContent");
   main.innerHTML = "";
   if (STATE.activeTab === "background") {
@@ -1021,8 +1128,8 @@ function renderOverviewSampleChart() {
       labels: DASHBOARD_DATA.days.map((d) => d.title),
       datasets: [
         { label: "Baseline surveyed", data: DASHBOARD_DATA.days.map((d) => d.nBaselineSurveyed), backgroundColor: COLORS.ochre },
-        { label: "Endline surveyed", data: DASHBOARD_DATA.days.map((d) => d.nEndlineSurveyed), backgroundColor: COLORS.navy },
-        { label: "Used in adoption charts", data: DASHBOARD_DATA.days.map((d) => d.nMatched), backgroundColor: COLORS.green },
+        { label: "Endline surveyed", data: DASHBOARD_DATA.days.map((d) => d.nEndlineSurveyed), backgroundColor: themedColors().navy },
+        { label: "Used in adoption charts", data: DASHBOARD_DATA.days.map((d) => d.nMatched), backgroundColor: themedColors().green },
       ],
     },
     options: {
@@ -1108,10 +1215,6 @@ function buildDayView(day) {
   toolbar.innerHTML = `
     ${multiSelectFieldHTML(day, "organization", "Organization", orgChoices, f.organization)}
     ${multiSelectFieldHTML(day, "county", "County", countyChoices, f.county)}
-    <div class="field">
-      <label for="f-name-${day}">Farmer name</label>
-      <input id="f-name-${day}" type="text" placeholder="Search name..." value="${f.farmerSearch}">
-    </div>
     ${multiSelectFieldHTML(day, "tenure", "Tenure", tenureChoices, f.tenure)}
     ${multiSelectFieldHTML(day, "practice", "Practice", practiceOptions, f.practice)}
     ${multiSelectFieldHTML(day, "baselineStatus", "Baseline status", statusChoices, f.baselineStatus, !isSinglePractice)}
@@ -1126,7 +1229,6 @@ function buildDayView(day) {
   wireMultiSelectField(toolbar, day, "practice", practiceOptions, f, renderMain);
   wireMultiSelectField(toolbar, day, "baselineStatus", statusChoices, f, renderMain);
   wireMultiSelectField(toolbar, day, "endlineStatus", statusChoices, f, renderMain);
-  toolbar.querySelector(`#f-name-${day}`).addEventListener("input", (e) => { f.farmerSearch = e.target.value; renderMain(); });
   toolbar.querySelector(`#reset-${day}`).addEventListener("click", () => { STATE.filters[day] = defaultFilters(); STATE.openMultiSelect = null; renderMain(); });
 
   // --- KPIs ---
@@ -1209,15 +1311,15 @@ function buildAllPracticesPanel(day, records) {
 
   panel.innerHTML = `
     <h2>All Practices: Baseline vs Endline</h2>
-    <div class="panel-sub">Filtered by organization/county/name above. Select a specific practice in the toolbar to drill into farmer-level detail and reasons for non-adoption. Click a bar/dot to focus on just that practice and dim the rest; click again to clear.</div>
+    <div class="panel-sub">Filtered by organization/county above. Select a specific practice in the toolbar to drill into farmer-level detail and reasons for non-adoption. Click a bar/dot to focus on just that practice and dim the rest; click again to clear.</div>
     <div class="two-col">
       <div>
         <div style="display:flex; justify-content:flex-end; margin-bottom:4px;"><button class="btn dl-btn" id="dl-dumbbell-${day}">Download</button></div>
-        <div class="chart-wrap" style="height:${Math.max(320, summary.length * 34)}px;"><canvas id="dumbbell-${day}"></canvas></div>
+        <div class="chart-wrap" style="height:${Math.max(320, summary.length * (isPhone() ? 40 : 34))}px;"><canvas id="dumbbell-${day}"></canvas></div>
       </div>
       <div>
         <div style="display:flex; justify-content:flex-end; margin-bottom:4px;"><button class="btn dl-btn" id="dl-quadrant-${day}">Download</button></div>
-        <div class="chart-wrap" style="height:${Math.max(320, summary.length * 34)}px;"><canvas id="quadrant-${day}"></canvas></div>
+        <div class="chart-wrap" style="height:${isPhone() ? 340 : Math.max(320, summary.length * 34)}px;"><canvas id="quadrant-${day}"></canvas></div>
       </div>
     </div>
   `;
@@ -1228,7 +1330,7 @@ function buildAllPracticesPanel(day, records) {
       const chart = STATE.charts[`dumbbell-${day}`];
       if (!chart) return;
       const a = document.createElement("a");
-      a.href = chart.toBase64Image("image/png", 1);
+      a.href = chartToPNG(chart);
       a.download = `day${day}_baseline_vs_endline_dumbbell.png`;
       a.click();
     });
@@ -1236,7 +1338,7 @@ function buildAllPracticesPanel(day, records) {
       const chart = STATE.charts[`quadrant-${day}`];
       if (!chart) return;
       const a = document.createElement("a");
-      a.href = chart.toBase64Image("image/png", 1);
+      a.href = chartToPNG(chart);
       a.download = `day${day}_baseline_vs_endline_quadrant.png`;
       a.click();
     });
@@ -1260,13 +1362,13 @@ function renderDumbbellChart(canvasId, summary) {
   const chart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels: sorted.map((s) => s.label),
+      labels: sorted.map((s) => (isPhone() ? wrapLabel(s.label, 18) : s.label)),
       datasets: [
         {
           label: "Baseline to Endline range",
           data: sorted.map((s) => [Math.min(s.baseCount, s.endCount), Math.max(s.baseCount, s.endCount)]),
-          backgroundColor: sorted.map((s) => (s.change >= 0 ? "rgba(63,125,75,0.25)" : "rgba(166,75,42,0.25)")),
-          borderColor: sorted.map((s) => (s.change >= 0 ? COLORS.green : COLORS.rust)),
+          backgroundColor: sorted.map((s) => (s.change >= 0 ? themed("rgba(63,125,75,0.25)", "rgba(111,191,126,0.32)") : themed("rgba(166,75,42,0.25)", "rgba(224,138,103,0.32)"))),
+          borderColor: sorted.map((s) => (s.change >= 0 ? themedColors().green : themedColors().rust)),
           borderWidth: 1,
           borderSkipped: false,
           barThickness: 14,
@@ -1278,7 +1380,7 @@ function renderDumbbellChart(canvasId, summary) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Baseline vs Endline (number of farmers)", font: { size: 13 } },
+        title: { display: true, text: "Baseline vs Endline (number of farmers)", font: { size: isPhone() ? 11 : 13 } },
         legend: { display: false },
         tooltip: {
           callbacks: {
@@ -1309,15 +1411,15 @@ function renderQuadrantChart(canvasId, summary) {
         {
           label: "Practices",
           data: summary.map((s) => ({ x: s.baseCount, y: s.endCount, label: s.label, change: s.change, n: s.n })),
-          backgroundColor: summary.map((s) => (s.change >= 0 ? COLORS.green : COLORS.rust)),
-          pointRadius: 7,
+          backgroundColor: summary.map((s) => (s.change >= 0 ? themedColors().green : themedColors().rust)),
+          pointRadius: isPhone() ? 6 : 7,
           pointHoverRadius: 9,
         },
         {
           label: "No change",
           data: [{ x: 0, y: 0 }, { x: maxN, y: maxN }],
           type: "line",
-          borderColor: COLORS.line,
+          borderColor: themed(COLORS.line, "#55665A"),
           borderDash: [5, 4],
           pointRadius: 0,
           borderWidth: 1,
@@ -1328,7 +1430,7 @@ function renderQuadrantChart(canvasId, summary) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Baseline vs Endline, number of farmers (above line = improved)", font: { size: 13 } },
+        title: { display: true, text: isPhone() ? ["Baseline vs Endline, number of farmers", "(above line = improved)"] : "Baseline vs Endline, number of farmers (above line = improved)", font: { size: isPhone() ? 11 : 13 } },
         legend: { display: false },
         tooltip: {
           callbacks: {
@@ -1385,7 +1487,7 @@ function buildPracticeDrilldownPanel(day, f, orgCountyNameFiltered, fullyFiltere
     reasonPanel.innerHTML = `
       <h2>Why Farmers Are Not Doing This</h2>
       <div class="panel-sub">Among currently filtered farmers not doing this practice at endline.</div>
-      <div class="chart-wrap" style="height:${Math.max(220, reasons.length * 36)}px;"><canvas id="reasons-${day}"></canvas></div>
+      <div class="chart-wrap" style="height:${Math.max(220, reasons.length * (isPhone() ? 58 : 36))}px;"><canvas id="reasons-${day}"></canvas></div>
     `;
   } else {
     reasonPanel.innerHTML = `
@@ -1419,7 +1521,7 @@ function renderReasonChart(canvasId, reasons) {
   const chart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels: reasons.map((r) => r.reason),
+      labels: reasons.map((r) => (isPhone() ? wrapLabel(r.reason, 24) : r.reason)),
       datasets: [{ data: reasons.map((r) => r.n), backgroundColor: COLORS.ochre }],
     },
     options: {
@@ -1548,25 +1650,6 @@ function computeTransitionsJS(records) {
 // or not) is read from transitionDetail.
 // ---------------------------------------------------------------------------
 
-// Chart 1 (composition, stacked counts) and Chart 2 (% uptake at endline)
-// share this one per-practice summary - both should show practices in the
-// same order since they sit side by side.
-function computeUptakeCompositionByPractice(records) {
-  const byQ = new Map();
-  records.forEach((r) => {
-    if (!byQ.has(r.question)) byQ.set(r.question, { question: r.question, label: r.shortLabel, questionText: r.questionText, sustained: 0, uptaken: 0, notObserved: 0, notPracticed: 0, n: 0 });
-    const b = byQ.get(r.question);
-    b.n++;
-    if (r.baseline === 1 && r.endline === 1) b.sustained++;
-    else if (r.baseline === 0 && r.endline === 1) b.uptaken++;
-    else if (r.baseline === 1 && r.endline === 0) b.notObserved++;
-    else b.notPracticed++;
-  });
-  return Array.from(byQ.values())
-    .map((b) => ({ ...b, pctUptake: b.n ? (100 * (b.sustained + b.uptaken) / b.n) : 0 }))
-    .sort((a, b) => a.question.localeCompare(b.question, undefined, { numeric: true }));
-}
-
 // Chart 3: BOTH "doing at endline" transition types - Continued (Sustained:
 // baseline & endline both Doing) and Uptaken (Newly adopted: baseline Not
 // doing, endline Doing) - each split by whether the endline visit confirmed
@@ -1628,7 +1711,7 @@ function updateRevealText(revealElId, summary, idx) {
   el.textContent = `${s.question}: ${s.questionText || s.label}`;
 }
 
-// Shared renderer for Chart 1, 3 and 4 - all are "N series stacked vertical
+// Shared renderer for the two stacked charts below - both are "N series stacked vertical
 // bar per practice" (categories along the bottom, counts going up), with
 // short "Q1"/"Q2" tick labels and a click-to-reveal line underneath instead
 // of long wordy labels eating into the bar area.
@@ -1656,7 +1739,7 @@ function renderStackedByPracticeChart(canvasId, summary, series, revealElId) {
         updateRevealText(revealElId, summary, next);
       },
       plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10.5 } } },
+        legend: { position: "bottom", labels: { boxWidth: isPhone() ? 9 : 12, font: { size: isPhone() ? 9 : 10.5 } } },
         tooltip: {
           callbacks: {
             title: (items) => {
@@ -1671,89 +1754,21 @@ function renderStackedByPracticeChart(canvasId, summary, series, revealElId) {
         },
       },
       scales: {
-        x: { stacked: true, ticks: { font: { size: 12 } } },
-        y: { stacked: true, min: 0, title: { display: true, text: "Number of farmers" } },
+        x: { stacked: true, ticks: { font: { size: isPhone() ? 10 : 12 } } },
+        y: { stacked: true, min: 0, title: { display: !isPhone(), text: "Number of farmers" } },
       },
     },
   });
   STATE.charts[canvasId] = chart;
 }
 
-// Chart 2: single-series vertical bar of % doing at endline per practice.
-function renderUptakePercentChart(canvasId, summary, revealElId) {
-  destroyChart(canvasId);
-  const ctx = document.getElementById(canvasId);
-  if (!ctx) return;
-  const chart = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: summary.map((s) => s.question),
-      datasets: [{ label: "Uptake at endline", data: summary.map((s) => s.pctUptake), backgroundColor: "#1F4E78", maxBarThickness: 60 }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      categoryPercentage: 0.7,
-      barPercentage: 0.9,
-      onClick: (evt, elements) => {
-        const clicked = elements.length ? elements[0].index : null;
-        const current = STATE.chartFocus[canvasId];
-        const next = (clicked === null || current === clicked) ? null : clicked;
-        STATE.chartFocus[canvasId] = next;
-        applyBarFocus(chart, canvasId);
-        updateRevealText(revealElId, summary, next);
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const s = summary[items[0].dataIndex];
-              return `${s.question}: ${s.questionText || s.label}`;
-            },
-            label: (c) => {
-              const s = summary[c.dataIndex];
-              return `${c.raw.toFixed(1)}% doing at endline (${s.sustained + s.uptaken} of ${s.n})`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: { ticks: { font: { size: 12 } } },
-        y: { min: 0, max: 100, title: { display: true, text: "% doing at endline" } },
-      },
-    },
-  });
-  STATE.charts[canvasId] = chart;
-}
-
-// Builds the whole imported-from-Excel panel: Chart 1 + Chart 2 side by
-// side, Chart 3 + Chart 4 side by side below.
+// Builds the imported-from-Excel panel: the Continued-vs-Uptaken chart and
+// the Not-Doing breakdown chart, side by side on wide screens and stacked
+// on tablets/phones.
 function buildImportedBarChartsPanel(day, records) {
   const container = document.createElement("div");
-  const CHART_HEIGHT = 420;
+  const CHART_HEIGHT = isPhone() ? 380 : 420;
   const revealBlock = (id) => `<div class="panel-sub" id="${id}" style="margin-top:8px; font-weight:600;">Click a bar to reveal the full question text.</div>`;
-
-  const compSummary = computeUptakeCompositionByPractice(records);
-  const row1 = document.createElement("div");
-  row1.className = "two-col-even";
-  const chart1Panel = document.createElement("div");
-  chart1Panel.className = "panel";
-  chart1Panel.innerHTML = `
-    <h2>Chart 1: Transition Composition per Practice</h2>
-    <div class="panel-sub">Sustained, Newly adopted, Discontinued, and Never adopted, per practice. Reflects the filters above. Click a bar to focus on it (and see the full question below).</div>
-    ${compSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc1-${day}"></canvas></div>${revealBlock(`bc1-reveal-${day}`)}` : `<div class="empty-note">No practices match the current filters.</div>`}
-  `;
-  const chart2Panel = document.createElement("div");
-  chart2Panel.className = "panel";
-  chart2Panel.innerHTML = `
-    <h2>Chart 2: Overall Uptake % per Practice</h2>
-    <div class="panel-sub">Share of farmers doing the practice at endline (Sustained + Newly adopted), per practice. Same practice order as Chart 1.</div>
-    ${compSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc2-${day}"></canvas></div>${revealBlock(`bc2-reveal-${day}`)}` : `<div class="empty-note">No practices match the current filters.</div>`}
-  `;
-  row1.appendChild(chart1Panel);
-  row1.appendChild(chart2Panel);
-  container.appendChild(row1);
 
   const verifSummary = computeContinuedUptakenVerificationByPractice(records);
   const notDoingSummary = computeNotDoingBreakdownByPractice(records);
@@ -1762,14 +1777,14 @@ function buildImportedBarChartsPanel(day, records) {
   const chart3Panel = document.createElement("div");
   chart3Panel.className = "panel";
   chart3Panel.innerHTML = `
-    <h2>Chart 3: Impact of Training - Continued vs. Uptaken</h2>
+    <h2>Impact of Training - Continued vs. Uptaken</h2>
     <div class="panel-sub">Farmers doing a practice at endline - Continued (doing at baseline too) or Uptaken (new since training) - each split by whether the endline visit confirmed it in person (Confirmed) or the evidence was unverified.</div>
     ${verifSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc3-${day}"></canvas></div>${revealBlock(`bc3-reveal-${day}`)}` : `<div class="empty-note">No records match the current filters.</div>`}
   `;
   const chart4Panel = document.createElement("div");
   chart4Panel.className = "panel";
   chart4Panel.innerHTML = `
-    <h2>Chart 4: Not Doing Breakdown</h2>
+   <h2>Not Doing Breakdown</h2>
     <div class="panel-sub">Farmers not doing a practice at endline (Discontinued or Never adopted), each split by whether they specifically attempted it but it failed.</div>
     ${notDoingSummary.length ? `<div class="chart-wrap" style="height:${CHART_HEIGHT}px;"><canvas id="bc4-${day}"></canvas></div>${revealBlock(`bc4-reveal-${day}`)}` : `<div class="empty-note">No non-adopters match the current filters.</div>`}
   `;
@@ -1778,26 +1793,13 @@ function buildImportedBarChartsPanel(day, records) {
   container.appendChild(row2);
 
   setTimeout(() => {
-    if (compSummary.length) {
-      // Bottom-to-top stack order matches the source chart: Sustained,
-      // Uptaken, Discontinued, Never adopted.
-      renderStackedByPracticeChart(`bc1-${day}`, compSummary, [
-        { label: "Sustained", data: compSummary.map((s) => s.sustained), color: "#2E7D32" },
-        { label: "Newly adopted", data: compSummary.map((s) => s.uptaken), color: "#66BB6A" },
-        { label: "Discontinued", data: compSummary.map((s) => s.notObserved), color: "#C62828" },
-        { label: "Never adopted", data: compSummary.map((s) => s.notPracticed), color: "#B0BEC5" },
-      ], `bc1-reveal-${day}`);
-      addChartDownloadButton(chart1Panel, `bc1-${day}`, `day${day}_transition_composition.png`);
-      renderUptakePercentChart(`bc2-${day}`, compSummary, `bc2-reveal-${day}`);
-      addChartDownloadButton(chart2Panel, `bc2-${day}`, `day${day}_uptake_percent.png`);
-    }
     if (verifSummary.length) {
       // Bottom-to-top: Continued-Confirmed, Continued-Unverified,
       // Uptaken-Confirmed, Uptaken-Unverified - each pair deep-then-faded.
       renderStackedByPracticeChart(`bc3-${day}`, verifSummary, [
-        { label: "Continued - Confirmed present", data: verifSummary.map((s) => s.continuedConfirmed), color: "#3A5480" },
+        { label: "Continued - Confirmed present", data: verifSummary.map((s) => s.continuedConfirmed), color: themed("#3A5480", "#6B8CC7") },
         { label: "Continued - Unverified", data: verifSummary.map((s) => s.continuedUnverified), color: "#7C93C9" },
-        { label: "Uptaken - Confirmed present", data: verifSummary.map((s) => s.uptakenConfirmed), color: "#2E7D32" },
+        { label: "Uptaken - Confirmed present", data: verifSummary.map((s) => s.uptakenConfirmed), color: themed("#2E7D32", "#4CAF50") },
         { label: "Uptaken - Unverified", data: verifSummary.map((s) => s.uptakenUnverified), color: "#A5D6A7" },
       ], `bc3-reveal-${day}`);
       addChartDownloadButton(chart3Panel, `bc3-${day}`, `day${day}_continued_verification.png`);
@@ -1806,9 +1808,9 @@ function buildImportedBarChartsPanel(day, records) {
       // Bottom-to-top: Practice not observed, its Attempted-but-failed
       // slice, Not practiced before/after, its Attempted-but-failed slice.
       renderStackedByPracticeChart(`bc4-${day}`, notDoingSummary, [
-        { label: "Practice not observed", data: notDoingSummary.map((s) => s.notObserved), color: "#C17B9E" },
-        { label: "Practice not observed (Attempted but failed)", data: notDoingSummary.map((s) => s.notObservedFailed), color: "#E3C0D3" },
-        { label: "Not practiced before and after", data: notDoingSummary.map((s) => s.notPracticed), color: "#5C6570" },
+        {label: "Practiced at baseline but not done at endline",data: notDoingSummary.map((s) => s.notObserved),color: "#C17B9E" },
+        {label: "Practiced at baseline but not done at endline (Attempted but failed)",data: notDoingSummary.map((s) => s.notObservedFailed),color: "#E3C0D3"},
+        { label: "Not practiced before and after", data: notDoingSummary.map((s) => s.notPracticed), color: themed("#5C6570", "#8793A1") },
         { label: "Not practiced before and after (Attempted but failed)", data: notDoingSummary.map((s) => s.notPracticedFailed), color: "#AEB4BB" },
       ], `bc4-reveal-${day}`);
       addChartDownloadButton(chart4Panel, `bc4-${day}`, `day${day}_not_doing_breakdown.png`);
@@ -1838,8 +1840,8 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
     ? practiceScopeLabel
     : (featuredPractice ? `Featured practice - ${featuredPractice.label}` : "no practices in range");
   const alluvialNote = !isSinglePractice
-    ? `Showing the practice with the largest baseline-to-endline change${featuredPractice ? ` (${featuredPractice.change >= 0 ? "+" : ""}${featuredPractice.change.toFixed(1)}pp)` : ""} among the practices currently in scope. Reflects the organization/county/name/tenure/practice filters above.`
-    : "Reflects the organization/county/name/tenure filters above.";
+    ? `Showing the practice with the largest baseline-to-endline change${featuredPractice ? ` (${featuredPractice.change >= 0 ? "+" : ""}${featuredPractice.change.toFixed(1)}pp)` : ""} among the practices currently in scope. Reflects the organization/county/tenure/practice filters above.`
+    : "Reflects the organization/county/tenure filters above.";
 
   const alluvialPanel = document.createElement("div");
   alluvialPanel.className = "panel";
@@ -1865,12 +1867,12 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
   tenurePanel.className = "panel";
   const tenureSummary = summarizeByPracticeAndTenure(orgCountyNameFiltered);
   const unknownCount = uniqueFarmerCount(orgCountyNameFiltered.filter((r) => r.tenure === "Unknown"));
-  const tenureChartHeight = Math.max(360, tenureSummary.length * 46);
+  const tenureChartHeight = Math.max(360, tenureSummary.length * (isPhone() ? 54 : 46));
   tenurePanel.innerHTML = `
     <h2>Practice Adoption: New vs Old Farmers</h2>
     <div class="panel-sub">
       New = 1.5 years or less with the organization, Old = more than 1.5 years (from Farmer_Membership records).
-      Reflects the organization/county/name/practice filters above, but ignores the Tenure filter since both groups are always shown here.
+      Reflects the organization/county/practice filters above, but ignores the Tenure filter since both groups are always shown here.
       ${unknownCount > 0 ? `${unknownCount} farmer(s) with unknown tenure are excluded from this chart.` : ""}
     </div>
     <div class="two-col-even">
@@ -1893,7 +1895,7 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
         const chart = STATE.charts[`${canvasPrefix}${day}`];
         if (!chart) return;
         const a = document.createElement("a");
-        a.href = chart.toBase64Image("image/png", 1);
+        a.href = chartToPNG(chart);
         a.download = `day${day}_tenure_comparison_${tag}.png`;
         a.click();
       });
@@ -1919,9 +1921,9 @@ function buildAdvancedViewsPanel(day, coreFiltered, orgCountyNameFiltered, f, nE
     : `Showing reasons for ${reasonScopeLabel} only (per the Practice filter above). Each farmer gives at most one reason for a given practice, so no box here can exceed the farmers surveyed at endline below.`;
   treemapPanel.innerHTML = `
     <h2>Reasons for Non-Adoption (${reasonScopeLabel})</h2>
-    <div class="panel-sub">Reflects the organization/county/name/tenure/practice filters above. ${reasonNote}</div>
+    <div class="panel-sub">Reflects the organization/county/tenure/practice filters above. ${reasonNote}</div>
     <div class="panel-sub" style="margin-top:-10px;">${uniqueNonAdopters} of ${typeof nEndlineFiltered === "number" ? nEndlineFiltered : "?"} farmers surveyed at endline gave a reason for not doing ${!isSinglePractice ? "at least one practice in scope" : reasonScopeLabel}${!isSinglePractice ? `, across ${nonAdoptionRecords.length} practice-level reason(s) in total` : ""}. Click a box to see the farmers behind it${!isSinglePractice ? " and which practice they cited it for" : ""}.</div>
-    <div id="treemap-${day}" style="position:relative; height:420px; border:1px solid var(--line); border-radius:4px; overflow:visible;"></div>
+    <div id="treemap-${day}" style="position:relative; height:${isPhone() ? 480 : 420}px; border:1px solid var(--line); border-radius:4px; overflow:visible;"></div>
     <div id="treemap-drill-${day}" style="margin-top:14px;"></div>
   `;
   container.appendChild(treemapPanel);
@@ -1978,7 +1980,7 @@ function renderTenureComparisonChart(canvasId, summary, period) {
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
 
-  const labels = summary.map((s) => s.label);
+  const labels = summary.map((s) => (isPhone() ? wrapLabel(s.label, 18) : s.label));
   const doingField = period === "Baseline" ? "BaseDoing" : "EndDoing";
   const notDoingField = period === "Baseline" ? "BaseNotDoing" : "EndNotDoing";
 
@@ -1997,10 +1999,10 @@ function renderTenureComparisonChart(canvasId, summary, period) {
     data: {
       labels,
       datasets: [
-        mkBar("New", "doing", `new${doingField}`, COLORS.green, "New: Doing"),
+        mkBar("New", "doing", `new${doingField}`, themedColors().green, "New: Doing"),
         mkBar("New", "notdoing", `new${notDoingField}`, COLORS.ochre, "New: Not doing"),
-        mkBar("Old", "doing", `old${doingField}`, COLORS.navy, "Old: Doing"),
-        mkBar("Old", "notdoing", `old${notDoingField}`, "#c1272d", "Old: Not doing"),
+        mkBar("Old", "doing", `old${doingField}`, themedColors().navy, "Old: Doing"),
+        mkBar("Old", "notdoing", `old${notDoingField}`, themed("#c1272d", "#E5595F"), "Old: Not doing"),
       ],
     },
     options: {
@@ -2013,7 +2015,7 @@ function renderTenureComparisonChart(canvasId, summary, period) {
         // Doing/Not doing) - showing the legend on just the Baseline chart
         // avoids printing the same legend twice for what's effectively one
         // shared key.
-        legend: { display: period === "Baseline" },
+        legend: { display: period === "Baseline", labels: { boxWidth: isPhone() ? 9 : 12, font: { size: isPhone() ? 9 : 12 } } },
         tooltip: {
           callbacks: {
             label: (ctx) => {
@@ -2040,6 +2042,7 @@ function renderTenureComparisonChart(canvasId, summary, period) {
 function renderAlluvialSVG(containerId, t) {
   const el = document.getElementById(containerId);
   if (!el) return;
+  const tc = themedColors();
   const leftNotDoing = t.stayedNotDoing + t.started;
   const leftDoing = t.stopped + t.stayedDoing;
   const rightNotDoing = t.stayedNotDoing + t.stopped;
@@ -2051,8 +2054,9 @@ function renderAlluvialSVG(containerId, t) {
     return;
   }
 
-  const W = 760, H = 300, gapFrac = 0.04;
-  const x0 = 160, x1 = 600;
+  const phone = isPhone();
+  const W = phone ? 420 : 760, H = 300, gapFrac = 0.04;
+  const x0 = phone ? 122 : 160, x1 = phone ? 296 : 600;
   const scale = (H * 0.82) / total;
   const gap = total * gapFrac * scale;
   const topMargin = 20;
@@ -2091,30 +2095,30 @@ function renderAlluvialSVG(containerId, t) {
 
   const barW = 14;
   const svg = `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" xmlns="http://www.w3.org/2000/svg" font-family="inherit">
-      <text x="${x0}" y="14" font-size="13" font-weight="700" fill="${COLORS.ink}">BASELINE</text>
-      <text x="${x1}" y="14" font-size="13" font-weight="700" fill="${COLORS.ink}">ENDLINE</text>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block; height:auto; max-width:${W}px; margin:0 auto;" xmlns="http://www.w3.org/2000/svg" font-family="inherit">
+      <text x="${x0}" y="14" font-size="13" font-weight="700" style="fill:var(--ink, #1E2A1F)">BASELINE</text>
+      <text x="${x1}" y="14" font-size="13" font-weight="700" style="fill:var(--ink, #1E2A1F)">ENDLINE</text>
 
       ${ribbon(lSNDb, lSNDt, rSNDb, rSNDt, "#BBBBBB")}
-      ${ribbon(lSTb, lSTt, rSTb, rSTt, COLORS.green)}
+      ${ribbon(lSTb, lSTt, rSTb, rSTt, tc.green)}
       ${ribbon(lSPb, lSPt, rSPb, rSPt, COLORS.ochre)}
-      ${ribbon(lSDb, lSDt, rSDb, rSDt, COLORS.navy)}
+      ${ribbon(lSDb, lSDt, rSDb, rSDt, tc.navy)}
 
-      <rect x="${x0 - barW}" y="${toY(leftNotDoing)}" width="${barW}" height="${toY(0) - toY(leftNotDoing)}" fill="${COLORS.navy}"></rect>
-      <rect x="${x0 - barW}" y="${toY(leftNotDoing + gapUnits + leftDoing)}" width="${barW}" height="${toY(leftNotDoing + gapUnits) - toY(leftNotDoing + gapUnits + leftDoing)}" fill="${COLORS.navy}"></rect>
+      <rect x="${x0 - barW}" y="${toY(leftNotDoing)}" width="${barW}" height="${toY(0) - toY(leftNotDoing)}" fill="${tc.navy}"></rect>
+      <rect x="${x0 - barW}" y="${toY(leftNotDoing + gapUnits + leftDoing)}" width="${barW}" height="${toY(leftNotDoing + gapUnits) - toY(leftNotDoing + gapUnits + leftDoing)}" fill="${tc.navy}"></rect>
       <rect x="${x1}" y="${toY(rightNotDoing)}" width="${barW}" height="${toY(0) - toY(rightNotDoing)}" fill="${COLORS.ochre}"></rect>
       <rect x="${x1}" y="${toY(rightNotDoing + gapUnits + rightDoing)}" width="${barW}" height="${toY(rightNotDoing + gapUnits) - toY(rightNotDoing + gapUnits + rightDoing)}" fill="${COLORS.ochre}"></rect>
 
-      <text x="${x0 - barW - 8}" y="${(toY(0) + toY(leftNotDoing)) / 2}" font-size="12" text-anchor="end" fill="${COLORS.ink}">Not doing (${leftNotDoing})</text>
-      <text x="${x0 - barW - 8}" y="${(toY(leftNotDoing + gapUnits) + toY(leftNotDoing + gapUnits + leftDoing)) / 2}" font-size="12" text-anchor="end" fill="${COLORS.ink}">Doing (${leftDoing})</text>
-      <text x="${x1 + barW + 8}" y="${(toY(0) + toY(rightNotDoing)) / 2}" font-size="12" fill="${COLORS.ink}">Not doing (${rightNotDoing})</text>
-      <text x="${x1 + barW + 8}" y="${(toY(rightNotDoing + gapUnits) + toY(rightNotDoing + gapUnits + rightDoing)) / 2}" font-size="12" fill="${COLORS.ink}">Doing (${rightDoing})</text>
+      <text x="${x0 - barW - 8}" y="${(toY(0) + toY(leftNotDoing)) / 2}" font-size="12" text-anchor="end" style="fill:var(--ink, #1E2A1F)">Not doing (${leftNotDoing})</text>
+      <text x="${x0 - barW - 8}" y="${(toY(leftNotDoing + gapUnits) + toY(leftNotDoing + gapUnits + leftDoing)) / 2}" font-size="12" text-anchor="end" style="fill:var(--ink, #1E2A1F)">Doing (${leftDoing})</text>
+      <text x="${x1 + barW + 8}" y="${(toY(0) + toY(rightNotDoing)) / 2}" font-size="12" style="fill:var(--ink, #1E2A1F)">Not doing (${rightNotDoing})</text>
+      <text x="${x1 + barW + 8}" y="${(toY(rightNotDoing + gapUnits) + toY(rightNotDoing + gapUnits + rightDoing)) / 2}" font-size="12" style="fill:var(--ink, #1E2A1F)">Doing (${rightDoing})</text>
     </svg>
     <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; margin-top:8px;">
       <span><span style="display:inline-block;width:10px;height:10px;background:#BBBBBB;margin-right:5px;"></span>Stayed not doing (${t.stayedNotDoing})</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:${COLORS.green};margin-right:5px;"></span>Started doing (${t.started})</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:${tc.green};margin-right:5px;"></span>Started doing (${t.started})</span>
       <span><span style="display:inline-block;width:10px;height:10px;background:${COLORS.ochre};margin-right:5px;"></span>Stopped doing (${t.stopped})</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:${COLORS.navy};margin-right:5px;"></span>Stayed doing (${t.stayedDoing})</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:${tc.navy};margin-right:5px;"></span>Stayed doing (${t.stayedDoing})</span>
     </div>
   `;
   el.innerHTML = svg;
@@ -2216,7 +2220,7 @@ function renderTreemapDiv(containerId, reasons, selectedReason, onSelect) {
   if (otherTotal > 0) items.push({ reason: "Other reasons", n: otherTotal });
 
   const totalAll = items.reduce((a, r) => a + r.n, 0);
-  const W = 100, H = 60;
+  const W = 100, H = isPhone() ? 100 : 60;
   const scale = (W * H) / totalAll;
   const sizes = items.map((r) => r.n * scale);
   const rects = squarifyJS(sizes, 0, 0, W, H);
@@ -2225,7 +2229,12 @@ function renderTreemapDiv(containerId, reasons, selectedReason, onSelect) {
     const item = items[i];
     const pctVal = ((item.n / totalAll) * 100).toFixed(1);
     const color = item.reason === "Other reasons" ? "#CCCCCC" : TREEMAP_PALETTE[i % TREEMAP_PALETTE.length];
-    const area = r.dx * r.dy;
+    // Judge box size in real pixels (not abstract units) so label size and
+    // visibility adapt to the screen: a box that's roomy on a laptop can be
+    // tiny on a phone.
+    const cw = el.clientWidth || 1200, ch = el.clientHeight || 420;
+    const areaPx = (r.dx / W) * cw * (r.dy / H) * ch;
+    const area = areaPx / 84; // 84px^2 per unit^2 is the desktop reference scale the thresholds below were tuned for
     const isSelected = item.reason === selectedReason;
     const isDimmed = !!selectedReason && !isSelected;
     // A selected box gets a fixed, larger readable font regardless of its
@@ -2241,7 +2250,7 @@ function renderTreemapDiv(containerId, reasons, selectedReason, onSelect) {
       `left:${(r.x / W) * 100}%`, `top:${(r.y / H) * 100}%`,
       `width:${(r.dx / W) * 100}%`, `height:${(r.dy / H) * 100}%`,
       `background:${color}`,
-      `border:${isSelected ? `3px solid ${COLORS.ink}` : "1px solid #fff"}`,
+      `border:${isSelected ? `3px solid ${themed(COLORS.ink, "#FFFFFF")}` : "1px solid #fff"}`,
       `box-sizing:border-box`, `display:flex`, `align-items:center`, `justify-content:center`,
       `padding:4px`, `overflow:${isSelected ? "visible" : "hidden"}`, `text-align:center`,
       isClickable ? "cursor:pointer" : "",
@@ -2341,9 +2350,22 @@ document.addEventListener("DOMContentLoaded", () => {
 function init() {
   document.getElementById("generatedDate").textContent = "Generated " + new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
   document.getElementById("dataSourceNote").textContent = DASHBOARD_DATA.generatedNote || "";
+  initThemeToggle();
   renderNameLockControl();
   renderTabs();
   renderMain();
+  // Charts are laid out differently on phone / tablet / desktop, so redraw
+  // when the screen crosses a breakpoint (e.g. rotating a phone). Chart.js
+  // itself already handles smaller resizes within a breakpoint.
+  let lastSize = viewportSize();
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const size = viewportSize();
+      if (size !== lastSize) { lastSize = size; renderMain(); }
+    }, 200);
+  });
   // Close any open multi-select filter dropdown on an outside click - the
   // toolbar itself is rebuilt on every renderMain(), so this one listener
   // (attached once, here) covers every day's dropdowns rather than needing

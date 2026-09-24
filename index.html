@@ -3,6 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#F2EFDE">
+<meta name="color-scheme" content="light dark">
+
+<!-- Apply the saved (or device) theme before first paint so the page never flashes the wrong colors -->
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("dashboardTheme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") {
+      t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+    }
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
 <title>Kenya AE Hub - CFHF Farmer Practice Adoption Dashboard</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -22,6 +36,28 @@
     --ochre-soft: #F6E9D2;
     --navy: #2E3B52;
     --shadow: 0 1px 2px rgba(30,42,31,0.06);
+    --input-bg: #FFFFFF;
+    color-scheme: light;
+  }
+
+  /* Dark theme: deep forest greens with warm, brighter accents so charts,
+     pills and text keep their contrast. */
+  :root[data-theme="dark"] {
+    --bg: #131914;
+    --panel: #1C241E;
+    --ink: #E8EDE4;
+    --ink-muted: #9DAE9F;
+    --line: #2F3C32;
+    --green: #6FBF7E;
+    --green-soft: #21382A;
+    --rust: #E58F6B;
+    --rust-soft: #3C2519;
+    --ochre: #E2AC4E;
+    --ochre-soft: #3B2F15;
+    --navy: #5B78A8;
+    --shadow: 0 1px 3px rgba(0,0,0,0.45);
+    --input-bg: #121812;
+    color-scheme: dark;
   }
 
   * {
@@ -275,7 +311,7 @@
 
     border-radius: 4px;
 
-    background: #fff;
+    background: var(--input-bg);
 
     color: var(--ink);
 
@@ -308,7 +344,7 @@
     padding: 7px 9px;
     border: 1px solid var(--line);
     border-radius: 4px;
-    background: #fff;
+    background: var(--input-bg);
     color: var(--ink);
     min-width: 150px;
     text-align: left;
@@ -347,7 +383,7 @@
     left: 0;
     z-index: 60;
 
-    background: #fff;
+    background: var(--input-bg);
     border: 1px solid var(--line);
     border-radius: 4px;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
@@ -388,7 +424,7 @@
 
     border: 1px solid var(--line);
 
-    background: #fff;
+    background: var(--input-bg);
 
     color: var(--ink);
 
@@ -712,7 +748,7 @@
 
     overflow: hidden;
 
-    background: #fff;
+    background: var(--input-bg);
 
     cursor: zoom-in;
   }
@@ -903,7 +939,7 @@
 
     font-size: 11.5px;
 
-    color: var(--ochre-soft);
+    color: #F6E9D2;
 
     font-weight: 600;
 
@@ -945,7 +981,7 @@
 
     border-color: var(--ochre);
 
-    color: var(--ink);
+    color: #1E2A1F;
 
     font-weight: 600;
   }
@@ -1328,71 +1364,551 @@
 
 
   /* =========================================================
-     RESPONSIVE HEADER
+     RESPONSIVE LAYOUT
+     Breakpoints: tablet <= 1024px, phone <= 700px,
+     small phone <= 480px / 380px.
      ========================================================= */
 
-  @media (max-width: 700px) {
+  /* --- Safeguards that apply on every screen size --- */
+
+  img, canvas, svg {
+    max-width: 100%;
+  }
+
+  /* Grid children must be allowed to shrink, otherwise a wide canvas or
+     table stops the column from narrowing and the page scrolls sideways. */
+  .two-col > *,
+  .two-col-even > *,
+  .bg-section-grid > *,
+  .panel,
+  .chart-wrap {
+    min-width: 0;
+  }
+
+  .kpi-row {
+    grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+  }
+
+  .day-summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  }
+
+  .gallery {
+    grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  }
+
+  .table-scroll {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table.data-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    z-index: 1;
+  }
+
+  .multiselect-panel {
+    max-width: calc(100vw - 24px);
+  }
+
+  nav.tabs {
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Touch screens: bigger tap targets, no tiny hover-only affordances */
+  @media (hover: none) and (pointer: coarse) {
+    .multiselect-option {
+      padding: 10px 14px;
+    }
+
+    button.btn {
+      min-height: 40px;
+    }
+
+    button.btn.dl-btn {
+      min-height: 34px;
+    }
+
+    nav.tabs button {
+      padding-top: 16px;
+      padding-bottom: 16px;
+    }
+  }
+
+
+  /* --- Tablet: 701px - 1024px --- */
+
+  @media (max-width: 1024px) {
 
     header {
-      grid-template-columns:
-        90px 1fr 90px;
-
-      gap: 10px;
-
-      padding: 18px 18px 32px;
+      grid-template-columns: 110px 1fr 110px;
+      padding: 18px 24px 26px;
     }
 
-    .header-logo {
-      height: 65px;
-    }
-
-    .header-logo.right-logo {
-      transform: translateY(-6px);
+    header .meta {
+      right: 24px;
     }
 
     .header-logo img {
-      max-width: 80px;
-
-      max-height: 58px;
+      max-width: 105px;
+      max-height: 70px;
     }
 
     header .title-block h1 {
-      font-size: 20px;
+      font-size: 23px;
+    }
+
+    nav.tabs {
+      padding: 0 24px;
+    }
+
+    main {
+      padding: 24px 24px 48px;
+    }
+
+    .partner-section {
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+
+    .bg-hero {
+      padding: 36px 30px;
+    }
+  }
+
+
+  /* --- Phone: 700px and below --- */
+
+  @media (max-width: 700px) {
+
+    body {
+      font-size: 14.5px;
+    }
+
+    /* Header: logos flank the title, metadata drops underneath */
+    header {
+      grid-template-columns: 62px 1fr 62px;
+      gap: 8px;
+      padding: 14px 14px 12px;
+    }
+
+    .header-logo {
+      height: 52px;
+    }
+
+    .header-logo.left-logo {
+      padding-right: 0;
+    }
+
+    .header-logo.right-logo {
+      padding-left: 0;
+      transform: none;
+    }
+
+    .header-logo img {
+      max-width: 60px;
+      max-height: 50px;
+    }
+
+    header .title-block h1 {
+      font-size: 17px;
+      line-height: 1.25;
     }
 
     header .title-block p {
       font-size: 11.5px;
+      margin-top: 4px;
     }
 
     header .meta {
-      right: 18px;
+      position: static;
+      grid-column: 1 / -1;
+      text-align: center;
+      margin-top: 4px;
     }
 
+    #nameLockControl {
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* Tabs stay visible while scrolling and swipe sideways */
+    nav.tabs {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      padding: 0 6px;
+      gap: 0;
+      scrollbar-width: none;
+    }
+
+    nav.tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    nav.tabs button {
+      padding: 13px 13px;
+      font-size: 13.5px;
+    }
+
+    main {
+      padding: 14px 12px 36px;
+    }
+
+    /* Filters: two per row instead of one long column */
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .field {
+      min-width: 0;
+    }
+
+    .field input,
+    .field select,
+    .multiselect-trigger {
+      min-width: 0;
+      width: 100%;
+    }
+
+    /* 16px stops iOS Safari zooming the page when a field is focused */
+    .field input,
+    .field select {
+      font-size: 16px;
+    }
+
+    .multiselect-panel {
+      min-width: 100%;
+      width: max-content;
+      max-height: 260px;
+    }
+
+    /* right-hand column dropdowns open leftwards so they stay on screen */
+    .toolbar .field.multiselect:nth-child(even) .multiselect-panel {
+      left: auto;
+      right: 0;
+    }
+
+    .multiselect-option {
+      white-space: normal;
+    }
+
+    .toolbar .reset-btn {
+      grid-column: 1 / -1;
+      margin-left: 0;
+      width: 100%;
+    }
+
+    .toolbar > button.btn.primary {
+      align-self: end;
+    }
+
+    /* KPI cards: two across */
+    .kpi-row {
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .kpi-row > :last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+
+    .kpi-card {
+      padding: 12px 12px;
+    }
+
+    .kpi-card .kpi-label {
+      font-size: 10.5px;
+    }
+
+    .kpi-card .kpi-value {
+      font-size: 24px;
+    }
+
+    .kpi-card .kpi-sub {
+      font-size: 11px;
+    }
+
+    /* Panels */
+    .panel {
+      padding: 14px 12px;
+      margin-bottom: 16px;
+    }
+
+    .panel h2 {
+      font-size: 16px;
+    }
+
+    .panel .panel-sub {
+      font-size: 12px;
+    }
+
+    .panel-header {
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .two-col,
+    .two-col-even {
+      gap: 16px;
+    }
+
+    /* Tables scroll sideways inside their own box */
+    table.data-table {
+      font-size: 12.5px;
+      min-width: 540px;
+    }
+
+    table.data-table th,
+    table.data-table td {
+      padding: 6px 8px;
+    }
+
+    .table-scroll {
+      max-height: 380px;
+    }
+
+    .table-footer {
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .day-summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    /* Project Background tab */
+    .bg-hero {
+      padding: 26px 18px;
+      min-height: 0;
+    }
+
+    /* text now spans the full width, so darken the whole photo evenly */
+    .bg-hero::before {
+      background: linear-gradient(
+        to bottom,
+        rgba(20,30,20,0.8) 0%,
+        rgba(20,30,20,0.62) 100%
+      );
+    }
+
+    .bg-hero h1 {
+      font-size: 22px;
+    }
+
+    .bg-hero p.lead {
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+
+    .bg-hero .cta-row {
+      margin-top: 18px;
+    }
+
+    .bg-hero .cta-row button {
+      flex: 1 1 100%;
+    }
+
+    .bg-stat-row {
+      grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+      gap: 10px;
+    }
+
+    .bg-stat-card {
+      padding: 12px 10px;
+    }
+
+    .bg-stat-card .n {
+      font-size: 24px;
+    }
+
+    .bg-body p {
+      font-size: 13.5px;
+    }
+
+    .limitation-box {
+      padding: 14px 14px;
+    }
+
+    .gallery {
+      grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+      gap: 10px;
+    }
+
+    #lightbox {
+      padding: 12px;
+    }
+
+    /* Partner logos */
     .partner-section {
-      padding-left: 18px;
+      padding: 6px 12px 20px;
+    }
 
-      padding-right: 18px;
+    .partner-section h2 {
+      font-size: 16px;
     }
 
     .partner-carousel {
-      grid-template-columns:
-        repeat(3, 1fr);
-    }
-  }
-
-  @media (max-width: 500px) {
-
-    .partner-carousel {
-      grid-template-columns:
-        repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
     }
 
     .partner-slot {
-      height: 90px;
+      height: 80px;
+      padding: 8px;
+    }
+
+    .partner-slot img {
+      max-height: 56px;
+    }
+
+    footer {
+      padding: 18px 14px;
+    }
+  }
+
+
+  /* --- Small phone: 480px and below --- */
+
+  @media (max-width: 480px) {
+
+    .partner-carousel {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .partner-slot {
+      height: 86px;
     }
 
     .partner-slot img {
       max-height: 62px;
+    }
+  }
+
+
+  /* --- Very small phone: 380px and below --- */
+
+  @media (max-width: 380px) {
+
+    .toolbar {
+      grid-template-columns: 1fr;
+    }
+
+    .toolbar .field.multiselect:nth-child(even) .multiselect-panel {
+      left: 0;
+      right: auto;
+    }
+
+    header .title-block h1 {
+      font-size: 16px;
+    }
+  }
+
+
+  /* =========================================================
+     THEME TOGGLE + DARK-MODE DETAILS
+     ========================================================= */
+
+  .theme-toggle {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 45;
+
+    width: 44px;
+    height: 44px;
+    padding: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    cursor: pointer;
+  }
+
+  .theme-toggle:hover {
+    border-color: var(--ochre);
+  }
+
+  .theme-toggle:focus-visible {
+    outline: 2px solid var(--ochre);
+    outline-offset: 2px;
+  }
+
+  .theme-toggle svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .theme-toggle .icon-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+  :root[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+
+  body,
+  .panel,
+  .kpi-card,
+  .toolbar,
+  .day-summary-card,
+  .bg-stat-card,
+  nav.tabs {
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+
+  /* Logos are designed for light backgrounds: give them a light card */
+  :root[data-theme="dark"] .header-logo img {
+    background: #F2EFDE;
+    border-radius: 8px;
+    padding: 4px 6px;
+  }
+
+  :root[data-theme="dark"] .partner-slot {
+    background: #F2EFDE;
+    border-color: #F2EFDE;
+  }
+
+  /* Photos and hero: slightly toned down so they don't glare */
+  :root[data-theme="dark"] .gallery img,
+  :root[data-theme="dark"] .bg-hero {
+    filter: brightness(0.92);
+  }
+
+  :root[data-theme="dark"] .multiselect-panel {
+    box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+  }
+
+  :root[data-theme="dark"] .quote-block {
+    color: var(--ink);
+  }
+
+  :root[data-theme="dark"] .limitation-box {
+    background: var(--rust-soft);
+  }
+
+  @media (max-width: 700px) {
+    .theme-toggle {
+      right: 12px;
+      bottom: 12px;
+      width: 42px;
+      height: 42px;
+    }
+  }
+
+  @media print {
+    .theme-toggle {
+      display: none !important;
     }
   }
 
@@ -1401,6 +1917,12 @@
 
 
 <body>
+
+<!-- Light / dark theme switch -->
+<button type="button" id="themeToggle" class="theme-toggle" aria-label="Switch to dark mode" title="Switch to dark mode" aria-pressed="false">
+  <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+</button>
 
 
 <!-- =========================================================
